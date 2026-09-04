@@ -24,6 +24,7 @@ const config = require("./config");
 
 const DATA_DIR = path.join(__dirname, "data");
 const MOD_TIMERS_FILE = path.join(DATA_DIR, "mod-timers.json");
+const XP_FILE = path.join(DATA_DIR, "xp.json");
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -49,6 +50,10 @@ function saveJson(filePath, data) {
 }
 
 const modTimers = loadJson(MOD_TIMERS_FILE, {});
+const xpData = loadJson(XP_FILE, {
+  users: {},
+  cooldowns: {}
+});
 
 const client = new Client({
   intents: [
@@ -163,6 +168,685 @@ function buildModEmbed(title, color, fields) {
 async function getGuildMember(interaction, user) {
   return interaction.guild.members.fetch(user.id).catch(() => null);
 }
+
+// =====================
+// XP + SHOP + PREFIX GAMES
+// =====================
+
+const casinoCooldowns = new Map();
+
+function getXpProfile(userId) {
+  if (!xpData.users[userId]) {
+    xpData.users[userId] = {
+      xp: 0,
+      messages: 0,
+      lastXpAt: 0
+    };
+  }
+
+  return xpData.users[userId];
+}
+
+function saveXpData() {
+  saveJson(XP_FILE, xpData);
+}
+
+function formatXp(amount) {
+  return Number(amount || 0).toLocaleString("en-US");
+}
+
+function getShopItems() {
+  return Array.isArray(config.xpShop)
+    ? config.xpShop.filter(item =>
+        item &&
+        item.key &&
+        item.name &&
+        item.roleId &&
+        Number.isFinite(Number(item.price)) &&
+        Number(item.price) > 0
+      )
+    : [];
+}
+
+function findShopItem(key) {
+  const normalized = String(key || "")
+    .trim()
+    .toLowerCase();
+
+  return getShopItems().find(
+    item => String(item.key).toLowerCase() === normalized
+  );
+}
+
+function parseXpAmount(value) {
+  const amount = Number(String(value || "").replace(/,/g, ""));
+
+  if (!Number.isInteger(amount) || amount <= 0) {
+    return null;
+  }
+
+  return amount;
+}
+
+function getMaxCasinoBet() {
+  const configured = Number(config.maxCasinoBet);
+
+  if (
+    Number.isInteger(configured) &&
+    configured > 0
+  ) {
+    return configured;
+  }
+
+  return 1000;
+}
+
+function getCasinoCooldownMs() {
+  const configured = Number(config.casinoCooldownMs);
+
+  if (
+    Number.isInteger(configured) &&
+    configured >= 1000
+  ) {
+    return configured;
+  }
+
+  return 5000;
+}
+
+function checkCasinoCooldown(userId) {
+  const now = Date.now();
+  const expiresAt = casinoCooldowns.get(userId) || 0;
+
+  if (expiresAt > now) {
+    return expiresAt - now;
+  }
+
+  casinoCooldowns.set(
+    userId,
+    now + getCasinoCooldownMs()
+  );
+
+  return 0;
+}
+
+function validateBet(userId, rawAmount) {
+  const amount = parseXpAmount(rawAmount);
+
+  if (!amount) {
+    return {
+      ok: false,
+      message:
+        "❌ סכום לא תקין. לדוגמה: `!coinflip 100 heads`"
+    };
+  }
+
+  const profile = getXpProfile(userId);
+  const maxBet = getMaxCasinoBet();
+
+  if (amount > maxBet) {
+    return {
+      ok: false,
+      message:
+        `❌ ההימור המקסימלי הוא **${formatXp(maxBet)} XP**.`
+    };
+  }
+
+  if (profile.xp < amount) {
+    return {
+      ok: false,
+      message:
+        `❌ אין לך מספיק XP. יש לך **${formatXp(profile.xp)} XP**.`
+    };
+  }
+
+  return {
+    ok: true,
+    amount,
+    profile
+  };
+}
+
+function buildXpHelpEmbed() {
+  return new EmbedBuilder()
+    .setColor("Blue")
+    .setTitle("🎮 Zone X XP")
+    .setDescription(
+      [
+        "כל המערכת משתמשת ב־**XP וירטואלי של השרת בלבד**.",
+        "",
+        "**XP & Shop**",
+        "`!xp` — מציג את כמות ה־XP שלך",
+        "`!shop` — מציג את חנות הרולים",
+        "`!buy <key>` — קונה רול מהחנות",
+        "",
+        "**משחקי מזל — Prefix בלבד**",
+        "`!coinflip <xp> <heads/tails>`",
+        "`!dice <xp> <1-6>`",
+        "`!slots <xp>`",
+        "",
+        "**Staff**",
+        "`!addxp @user <amount>`",
+        "`!removexp @user <amount>`",
+        "`!setxp @user <amount>`"
+      ].join("\n")
+    )
+    .setFooter({
+      text:
+        `מקסימום למשחק: ${formatXp(getMaxCasinoBet())} XP`
+    });
+}
+
+async function sendXpShop(message) {
+  const items = getShopItems();
+
+  if (!items.length) {
+    return message.reply(
+      "❌ אין כרגע רולים מוגדרים ב־XP Shop. בדוק `xpShop` ב־config.js."
+    );
+  }
+
+  const lines = items.map(item => {
+    const emoji = item.emoji || "🎁";
+
+    return (
+      `${emoji} **${item.name}** — ` +
+      `**${formatXp(item.price)} XP**\n` +
+      `מפתח: \`${item.key}\` | רול: <@&${item.roleId}>`
+    );
+  });
+
+  const embed = new EmbedBuilder()
+    .setColor("Blue")
+    .setTitle("🛒 Zone X XP Shop")
+    .setDescription(
+      `${lines.join("\n\n")}\n\n` +
+      "לקנייה: `!buy <key>`"
+    );
+
+  return message.reply({
+    embeds: [embed],
+    allowedMentions: {
+      roles: []
+    }
+  });
+}
+
+async function buyXpRole(message, itemKey) {
+  const item = findShopItem(itemKey);
+
+  if (!item) {
+    return message.reply(
+      "❌ לא מצאתי את הפריט הזה. השתמש ב־`!shop` כדי לראות את המפתחות."
+    );
+  }
+
+  const member = message.member;
+
+  if (!member) {
+    return message.reply("❌ לא מצאתי אותך בשרת.");
+  }
+
+  if (member.roles.cache.has(item.roleId)) {
+    return message.reply(
+      `❌ כבר יש לך את הרול **${item.name}**.`
+    );
+  }
+
+  const role = await message.guild.roles
+    .fetch(item.roleId)
+    .catch(() => null);
+
+  if (!role) {
+    return message.reply(
+      `❌ לא מצאתי את הרול של **${item.name}**.`
+    );
+  }
+
+  const botMember = await message.guild.members
+    .fetchMe()
+    .catch(() => null);
+
+  if (
+    !botMember?.permissions.has(
+      PermissionFlagsBits.ManageRoles
+    )
+  ) {
+    return message.reply(
+      "❌ לבוט אין `Manage Roles`."
+    );
+  }
+
+  if (
+    role.managed ||
+    role.position >= botMember.roles.highest.position
+  ) {
+    return message.reply(
+      "❌ הבוט לא יכול לתת את הרול הזה. שים את רול הבוט מעל רולי החנות."
+    );
+  }
+
+  const profile = getXpProfile(message.author.id);
+  const price = Number(item.price);
+
+  if (profile.xp < price) {
+    return message.reply(
+      `❌ אין לך מספיק XP. צריך **${formatXp(price)} XP** ויש לך **${formatXp(profile.xp)} XP**.`
+    );
+  }
+
+  try {
+    await member.roles.add(
+      role,
+      `Zone X XP Shop purchase by ${message.author.tag}`
+    );
+
+    profile.xp -= price;
+    saveXpData();
+
+    return message.reply(
+      `✅ קנית את **${item.name}** ב־**${formatXp(price)} XP**!\n` +
+      `נשארו לך **${formatXp(profile.xp)} XP**.`
+    );
+  } catch (error) {
+    console.error("❌ XP shop role add error:", error);
+
+    return message.reply(
+      "❌ לא הצלחתי לתת את הרול. ה־XP שלך לא ירד."
+    );
+  }
+}
+
+function awardMessageXp(message) {
+  const profile = getXpProfile(message.author.id);
+  const now = Date.now();
+
+  const cooldownMs = Math.max(
+    10_000,
+    Number(config.xpMessageCooldownMs) || 60_000
+  );
+
+  if (now - profile.lastXpAt < cooldownMs) {
+    return 0;
+  }
+
+  const min = Math.max(
+    1,
+    Number(config.xpPerMessageMin) || 5
+  );
+
+  const max = Math.max(
+    min,
+    Number(config.xpPerMessageMax) || 15
+  );
+
+  const gained =
+    Math.floor(Math.random() * (max - min + 1)) + min;
+
+  profile.xp += gained;
+  profile.messages += 1;
+  profile.lastXpAt = now;
+
+  saveXpData();
+  return gained;
+}
+
+function isXpStaff(member) {
+  return isStaff(member);
+}
+
+async function handleStaffXpCommand(
+  message,
+  command,
+  args
+) {
+  if (!isXpStaff(message.member)) {
+    return message.reply(
+      "❌ הפקודה הזאת מיועדת לצוות בלבד."
+    );
+  }
+
+  const target =
+    message.mentions.users.first();
+
+  const amount = parseXpAmount(
+    args.find(arg => /^\d[\d,]*$/.test(arg))
+  );
+
+  if (!target || !amount) {
+    return message.reply(
+      `❌ שימוש: \`!${command} @user <amount>\``
+    );
+  }
+
+  const profile = getXpProfile(target.id);
+
+  if (command === "addxp") {
+    profile.xp += amount;
+  }
+
+  if (command === "removexp") {
+    profile.xp = Math.max(0, profile.xp - amount);
+  }
+
+  if (command === "setxp") {
+    profile.xp = amount;
+  }
+
+  saveXpData();
+
+  return message.reply(
+    `✅ ל־${target} יש עכשיו **${formatXp(profile.xp)} XP**.`
+  );
+}
+
+async function playCoinflip(message, args) {
+  const cooldown = checkCasinoCooldown(
+    message.author.id
+  );
+
+  if (cooldown > 0) {
+    return message.reply(
+      `⏳ חכה עוד **${Math.ceil(cooldown / 1000)} שניות** לפני משחק נוסף.`
+    );
+  }
+
+  const validation = validateBet(
+    message.author.id,
+    args[0]
+  );
+
+  if (!validation.ok) {
+    return message.reply(validation.message);
+  }
+
+  const choice = String(args[1] || "")
+    .toLowerCase();
+
+  const aliases = {
+    h: "heads",
+    head: "heads",
+    heads: "heads",
+    עץ: "heads",
+    t: "tails",
+    tail: "tails",
+    tails: "tails",
+    פלי: "tails"
+  };
+
+  const picked = aliases[choice];
+
+  if (!picked) {
+    return message.reply(
+      "❌ בחר `heads` או `tails`.\nלדוגמה: `!coinflip 100 heads`"
+    );
+  }
+
+  const { amount, profile } = validation;
+  profile.xp -= amount;
+
+  const result =
+    Math.random() < 0.5 ? "heads" : "tails";
+
+  const won = picked === result;
+
+  if (won) {
+    profile.xp += amount * 2;
+  }
+
+  saveXpData();
+
+  return message.reply(
+    `${result === "heads" ? "🪙 Heads" : "🪙 Tails"}\n` +
+    (
+      won
+        ? `✅ ניצחת **${formatXp(amount)} XP**!`
+        : `❌ הפסדת **${formatXp(amount)} XP**.`
+    ) +
+    `\n💰 יתרה: **${formatXp(profile.xp)} XP**`
+  );
+}
+
+async function playDice(message, args) {
+  const cooldown = checkCasinoCooldown(
+    message.author.id
+  );
+
+  if (cooldown > 0) {
+    return message.reply(
+      `⏳ חכה עוד **${Math.ceil(cooldown / 1000)} שניות** לפני משחק נוסף.`
+    );
+  }
+
+  const validation = validateBet(
+    message.author.id,
+    args[0]
+  );
+
+  if (!validation.ok) {
+    return message.reply(validation.message);
+  }
+
+  const picked = Number(args[1]);
+
+  if (
+    !Number.isInteger(picked) ||
+    picked < 1 ||
+    picked > 6
+  ) {
+    return message.reply(
+      "❌ בחר מספר בין `1` ל־`6`.\nלדוגמה: `!dice 100 4`"
+    );
+  }
+
+  const { amount, profile } = validation;
+  profile.xp -= amount;
+
+  const rolled =
+    Math.floor(Math.random() * 6) + 1;
+
+  const won = rolled === picked;
+
+  // 1-in-6 chance, 6x total return when correct.
+  if (won) {
+    profile.xp += amount * 6;
+  }
+
+  saveXpData();
+
+  return message.reply(
+    `🎲 יצא **${rolled}**\n` +
+    (
+      won
+        ? `✅ פגעת במספר! זכית ב־**${formatXp(amount * 5)} XP נטו**.`
+        : `❌ לא פגעת. הפסדת **${formatXp(amount)} XP**.`
+    ) +
+    `\n💰 יתרה: **${formatXp(profile.xp)} XP**`
+  );
+}
+
+async function playSlots(message, args) {
+  const cooldown = checkCasinoCooldown(
+    message.author.id
+  );
+
+  if (cooldown > 0) {
+    return message.reply(
+      `⏳ חכה עוד **${Math.ceil(cooldown / 1000)} שניות** לפני משחק נוסף.`
+    );
+  }
+
+  const validation = validateBet(
+    message.author.id,
+    args[0]
+  );
+
+  if (!validation.ok) {
+    return message.reply(validation.message);
+  }
+
+  const { amount, profile } = validation;
+  profile.xp -= amount;
+
+  const symbols = [
+    "🍒",
+    "🍋",
+    "🍇",
+    "🔔",
+    "⭐",
+    "💎"
+  ];
+
+  const spin = [
+    symbols[Math.floor(Math.random() * symbols.length)],
+    symbols[Math.floor(Math.random() * symbols.length)],
+    symbols[Math.floor(Math.random() * symbols.length)]
+  ];
+
+  const counts = {};
+  for (const symbol of spin) {
+    counts[symbol] = (counts[symbol] || 0) + 1;
+  }
+
+  const maxSame = Math.max(...Object.values(counts));
+  let payout = 0;
+  let resultText = "";
+
+  if (maxSame === 3) {
+    payout = amount * 6;
+    resultText =
+      `💎 שלישייה! זכית ב־**${formatXp(amount * 5)} XP נטו**.`;
+  } else if (maxSame === 2) {
+    payout = amount * 2;
+    resultText =
+      `✅ זוג! זכית ב־**${formatXp(amount)} XP נטו**.`;
+  } else {
+    resultText =
+      `❌ אין התאמה. הפסדת **${formatXp(amount)} XP**.`;
+  }
+
+  profile.xp += payout;
+  saveXpData();
+
+  return message.reply(
+    `🎰 | ${spin.join(" | ")} |\n` +
+    `${resultText}\n` +
+    `💰 יתרה: **${formatXp(profile.xp)} XP**`
+  );
+}
+
+client.on(Events.MessageCreate, async message => {
+  try {
+    if (!message.guild) return;
+    if (message.author.bot) return;
+
+    const prefix = String(
+      config.xpPrefix || "!"
+    );
+
+    const content = String(
+      message.content || ""
+    ).trim();
+
+    // Prefix commands do not earn message XP.
+    if (!content.startsWith(prefix)) {
+      awardMessageXp(message);
+      return;
+    }
+
+    const withoutPrefix =
+      content.slice(prefix.length).trim();
+
+    if (!withoutPrefix) return;
+
+    const parts = withoutPrefix.split(/\s+/);
+    const command = String(parts.shift() || "")
+      .toLowerCase();
+    const args = parts;
+
+    if (
+      [
+        "xphelp",
+        "xp",
+        "balance",
+        "shop",
+        "buy",
+        "coinflip",
+        "cf",
+        "dice",
+        "slots",
+        "addxp",
+        "removexp",
+        "setxp"
+      ].includes(command) === false
+    ) {
+      return;
+    }
+
+    if (command === "xphelp") {
+      return message.reply({
+        embeds: [buildXpHelpEmbed()]
+      });
+    }
+
+    if (
+      command === "xp" ||
+      command === "balance"
+    ) {
+      const profile =
+        getXpProfile(message.author.id);
+
+      return message.reply(
+        `💰 יש לך **${formatXp(profile.xp)} XP**.`
+      );
+    }
+
+    if (command === "shop") {
+      return sendXpShop(message);
+    }
+
+    if (command === "buy") {
+      return buyXpRole(
+        message,
+        args[0]
+      );
+    }
+
+    if (
+      command === "addxp" ||
+      command === "removexp" ||
+      command === "setxp"
+    ) {
+      return handleStaffXpCommand(
+        message,
+        command,
+        args
+      );
+    }
+
+    if (
+      command === "coinflip" ||
+      command === "cf"
+    ) {
+      return playCoinflip(message, args);
+    }
+
+    if (command === "dice") {
+      return playDice(message, args);
+    }
+
+    if (command === "slots") {
+      return playSlots(message, args);
+    }
+  } catch (error) {
+    console.error("❌ XP prefix command error:", error);
+
+    return message.reply(
+      "❌ הייתה שגיאה במערכת ה־XP."
+    ).catch(() => {});
+  }
+});
+
 
 async function checkModTimers() {
   const now = Date.now();
@@ -606,6 +1290,7 @@ async function openTicket(interaction, ticketData) {
 client.once(Events.ClientReady, async readyClient => {
   console.log(`✅ Zone X logged in as ${readyClient.user.tag}`);
   console.log("🎟️ Zone X ticket system loaded");
+  console.log("🎮 Zone X XP + Shop loaded");
 
   await checkModTimers();
 
