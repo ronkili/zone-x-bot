@@ -317,8 +317,8 @@ function buildXpHelpEmbed() {
         "",
         "**XP & Shop**",
         "`!xp` — מציג את כמות ה־XP שלך",
-        "`!shop` — מציג את חנות הרולים",
-        "`!buy <key>` — קונה רול מהחנות",
+        "החנות נשלחת על ידי הצוות עם `/setup-xp-shop`.",
+        "קניית רולים מתבצעת רק דרך הכפתורים בפאנל.",
         "",
         "**משחקי מזל — Prefix בלבד**",
         "`!coinflip <xp> <heads/tails>`",
@@ -337,13 +337,11 @@ function buildXpHelpEmbed() {
     });
 }
 
-async function sendXpShop(message) {
-  const items = getShopItems();
+function buildXpShopPanel() {
+  const items = getShopItems().slice(0, 25);
 
   if (!items.length) {
-    return message.reply(
-      "❌ אין כרגע רולים מוגדרים ב־XP Shop. בדוק `xpShop` ב־config.js."
-    );
+    return null;
   }
 
   const lines = items.map(item => {
@@ -352,7 +350,7 @@ async function sendXpShop(message) {
     return (
       `${emoji} **${item.name}** — ` +
       `**${formatXp(item.price)} XP**\n` +
-      `מפתח: \`${item.key}\` | רול: <@&${item.roleId}>`
+      `רול: <@&${item.roleId}>`
     );
   });
 
@@ -360,100 +358,164 @@ async function sendXpShop(message) {
     .setColor("Blue")
     .setTitle("🛒 Zone X XP Shop")
     .setDescription(
-      `${lines.join("\n\n")}\n\n` +
-      "לקנייה: `!buy <key>`"
-    );
+      "לחצו על הכפתור של הרול שאתם רוצים לקנות.\n" +
+      "אם יש לכם מספיק XP, המחיר ירד אוטומטית והרול יינתן לכם.\n\n" +
+      lines.join("\n\n")
+    )
+    .setFooter({
+      text: "Zone X • XP Shop"
+    });
 
-  return message.reply({
+  const rows = [];
+
+  for (let i = 0; i < items.length; i += 5) {
+    const row = new ActionRowBuilder();
+
+    for (const item of items.slice(i, i + 5)) {
+      const button = new ButtonBuilder()
+        .setCustomId(
+          `xp_shop_buy:${String(item.key).slice(0, 80)}`
+        )
+        .setLabel(
+          `${String(item.name).slice(0, 50)} • ${formatXp(item.price)} XP`
+        )
+        .setStyle(ButtonStyle.Primary);
+
+      if (item.emoji) {
+        button.setEmoji(item.emoji);
+      }
+
+      row.addComponents(button);
+    }
+
+    rows.push(row);
+  }
+
+  return {
     embeds: [embed],
+    components: rows,
     allowedMentions: {
       roles: []
     }
-  });
+  };
 }
 
-async function buyXpRole(message, itemKey) {
-  const item = findShopItem(itemKey);
+const xpPurchaseLocks = new Set();
 
-  if (!item) {
-    return message.reply(
-      "❌ לא מצאתי את הפריט הזה. השתמש ב־`!shop` כדי לראות את המפתחות."
-    );
+async function buyXpRoleFromButton(interaction, itemKey) {
+  if (xpPurchaseLocks.has(interaction.user.id)) {
+    return interaction.reply({
+      content: "⏳ יש לך כבר רכישה שמתבצעת. נסה שוב בעוד רגע.",
+      ephemeral: true
+    });
   }
 
-  const member = message.member;
-
-  if (!member) {
-    return message.reply("❌ לא מצאתי אותך בשרת.");
-  }
-
-  if (member.roles.cache.has(item.roleId)) {
-    return message.reply(
-      `❌ כבר יש לך את הרול **${item.name}**.`
-    );
-  }
-
-  const role = await message.guild.roles
-    .fetch(item.roleId)
-    .catch(() => null);
-
-  if (!role) {
-    return message.reply(
-      `❌ לא מצאתי את הרול של **${item.name}**.`
-    );
-  }
-
-  const botMember = await message.guild.members
-    .fetchMe()
-    .catch(() => null);
-
-  if (
-    !botMember?.permissions.has(
-      PermissionFlagsBits.ManageRoles
-    )
-  ) {
-    return message.reply(
-      "❌ לבוט אין `Manage Roles`."
-    );
-  }
-
-  if (
-    role.managed ||
-    role.position >= botMember.roles.highest.position
-  ) {
-    return message.reply(
-      "❌ הבוט לא יכול לתת את הרול הזה. שים את רול הבוט מעל רולי החנות."
-    );
-  }
-
-  const profile = getXpProfile(message.author.id);
-  const price = Number(item.price);
-
-  if (profile.xp < price) {
-    return message.reply(
-      `❌ אין לך מספיק XP. צריך **${formatXp(price)} XP** ויש לך **${formatXp(profile.xp)} XP**.`
-    );
-  }
+  xpPurchaseLocks.add(interaction.user.id);
 
   try {
-    await member.roles.add(
-      role,
-      `Zone X XP Shop purchase by ${message.author.tag}`
-    );
+    await interaction.deferReply({
+      ephemeral: true
+    });
+
+    const item = findShopItem(itemKey);
+
+    if (!item) {
+      return interaction.editReply({
+        content:
+          "❌ הפריט הזה כבר לא קיים בחנות. בקש מהצוות לשלוח פאנל חדש."
+      });
+    }
+
+    const member = await interaction.guild.members
+      .fetch(interaction.user.id)
+      .catch(() => null);
+
+    if (!member) {
+      return interaction.editReply({
+        content: "❌ לא הצלחתי למצוא אותך בשרת."
+      });
+    }
+
+    if (member.roles.cache.has(item.roleId)) {
+      return interaction.editReply({
+        content:
+          `❌ כבר יש לך את הרול **${item.name}**. לא ירד לך XP.`
+      });
+    }
+
+    const role = await interaction.guild.roles
+      .fetch(item.roleId)
+      .catch(() => null);
+
+    if (!role) {
+      return interaction.editReply({
+        content:
+          `❌ הרול **${item.name}** לא נמצא. לא ירד לך XP.`
+      });
+    }
+
+    const botMember = await interaction.guild.members
+      .fetchMe()
+      .catch(() => null);
+
+    if (
+      !botMember?.permissions.has(
+        PermissionFlagsBits.ManageRoles
+      )
+    ) {
+      return interaction.editReply({
+        content:
+          "❌ לבוט אין `Manage Roles`. לא ירד לך XP."
+      });
+    }
+
+    if (
+      role.managed ||
+      role.position >= botMember.roles.highest.position
+    ) {
+      return interaction.editReply({
+        content:
+          "❌ הבוט לא יכול לתת את הרול הזה. שים את רול הבוט מעל רולי החנות. לא ירד לך XP."
+      });
+    }
+
+    const profile = getXpProfile(interaction.user.id);
+    const price = Number(item.price);
+
+    if (profile.xp < price) {
+      return interaction.editReply({
+        content:
+          `❌ אין לך מספיק XP בשביל **${item.name}**.\n` +
+          `מחיר: **${formatXp(price)} XP**\n` +
+          `יש לך: **${formatXp(profile.xp)} XP**`
+      });
+    }
+
+    try {
+      await member.roles.add(
+        role,
+        `Zone X XP Shop purchase by ${interaction.user.tag}`
+      );
+    } catch (error) {
+      console.error("❌ XP shop button role add error:", error);
+
+      return interaction.editReply({
+        content:
+          "❌ לא הצלחתי לתת את הרול ולכן לא ירד לך XP."
+      });
+    }
 
     profile.xp -= price;
     saveXpData();
 
-    return message.reply(
-      `✅ קנית את **${item.name}** ב־**${formatXp(price)} XP**!\n` +
-      `נשארו לך **${formatXp(profile.xp)} XP**.`
-    );
-  } catch (error) {
-    console.error("❌ XP shop role add error:", error);
-
-    return message.reply(
-      "❌ לא הצלחתי לתת את הרול. ה־XP שלך לא ירד."
-    );
+    return interaction.editReply({
+      content:
+        `✅ קנית את **${item.name}** ב־**${formatXp(price)} XP**!\n` +
+        `🎭 קיבלת את הרול ${role}.\n` +
+        `💰 נשארו לך **${formatXp(profile.xp)} XP**.`
+    });
+  } finally {
+    xpPurchaseLocks.delete(interaction.user.id);
   }
 }
 
@@ -769,8 +831,6 @@ client.on(Events.MessageCreate, async message => {
         "xphelp",
         "xp",
         "balance",
-        "shop",
-        "buy",
         "coinflip",
         "cf",
         "dice",
@@ -798,17 +858,6 @@ client.on(Events.MessageCreate, async message => {
 
       return message.reply(
         `💰 יש לך **${formatXp(profile.xp)} XP**.`
-      );
-    }
-
-    if (command === "shop") {
-      return sendXpShop(message);
-    }
-
-    if (command === "buy") {
-      return buyXpRole(
-        message,
-        args[0]
       );
     }
 
@@ -1460,6 +1509,51 @@ client.on(Events.InteractionCreate, async interaction => {
         }
       }
 
+      if (interaction.commandName === "setup-xp-shop") {
+        if (!isStaff(interaction.member)) {
+          return replyToInteraction(interaction, {
+            content:
+              "❌ רק צוות Zone X יכול לשלוח את פאנל ה־XP Shop.",
+            ephemeral: true
+          });
+        }
+
+        if (!interaction.channel?.isTextBased()) {
+          return replyToInteraction(interaction, {
+            content:
+              "❌ אפשר לשלוח את פאנל ה־XP Shop רק בחדר טקסט.",
+            ephemeral: true
+          });
+        }
+
+        const panel = buildXpShopPanel();
+
+        if (!panel) {
+          return replyToInteraction(interaction, {
+            content:
+              "❌ אין רולים תקינים ב־`xpShop` בתוך config.js.",
+            ephemeral: true
+          });
+        }
+
+        try {
+          await interaction.channel.send(panel);
+
+          return replyToInteraction(interaction, {
+            content: "✅ פאנל ה־XP Shop נשלח.",
+            ephemeral: true
+          });
+        } catch (error) {
+          console.error("❌ XP Shop panel error:", error);
+
+          return replyToInteraction(interaction, {
+            content:
+              "❌ לא הצלחתי לשלוח את פאנל ה־XP Shop. בדוק שלבוט יש Send Messages ו־Embed Links.",
+            ephemeral: true
+          });
+        }
+      }
+
       const moderationCommands = [
         "warn",
         "mute",
@@ -2079,6 +2173,17 @@ client.on(Events.InteractionCreate, async interaction => {
     }
 
     if (!interaction.isButton()) return;
+
+    if (interaction.customId.startsWith("xp_shop_buy:")) {
+      const itemKey = interaction.customId.slice(
+        "xp_shop_buy:".length
+      );
+
+      return buyXpRoleFromButton(
+        interaction,
+        itemKey
+      );
+    }
 
     if (interaction.customId === "zone_ticket_claim") {
       if (!isTicketStaff(interaction.member, interaction.channel)) {
