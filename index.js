@@ -849,13 +849,13 @@ client.on(Events.InteractionCreate, async interaction => {
           interaction.options.getString("reason") ||
           "לא צוינה סיבה";
 
-        const duration = parseDuration(durationText, 30);
+        const duration = parseDuration(durationText, 28);
 
         if (!duration) {
           return replyToInteraction(interaction, {
             content:
               "❌ זמן לא תקין. השתמש לדוגמה ב־`30s`, `10m`, `2h`, `3d`. " +
-              "המינימום 10 שניות והמקסימום 30 ימים.",
+              "המינימום 10 שניות והמקסימום 28 ימים.",
             ephemeral: true
           });
         }
@@ -899,6 +899,20 @@ client.on(Events.InteractionCreate, async interaction => {
           });
         }
 
+        if (!botMember.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+          return replyToInteraction(interaction, {
+            content: "❌ לבוט אין `Moderate Members`, ולכן הוא לא יכול להפעיל Mute אמיתי.",
+            ephemeral: true
+          });
+        }
+
+        if (!member.moderatable) {
+          return replyToInteraction(interaction, {
+            content: "❌ אי אפשר לעשות Mute למשתמש הזה. בדוק שהרול של הבוט מעל הרול שלו.",
+            ephemeral: true
+          });
+        }
+
         if (
           muteRole.managed ||
           muteRole.position >= botMember.roles.highest.position
@@ -915,6 +929,27 @@ client.on(Events.InteractionCreate, async interaction => {
           muteRole,
           `${reason} | by ${interaction.user.tag}`
         );
+
+        try {
+          await member.timeout(
+            duration,
+            `${reason} | Zone X mute by ${interaction.user.tag}`
+          );
+        } catch (error) {
+          await member.roles.remove(
+            muteRole,
+            "Zone X mute rollback because timeout failed"
+          ).catch(() => {});
+
+          console.error("❌ Mute timeout error:", error);
+
+          return replyToInteraction(interaction, {
+            content:
+              "❌ הצלחתי לתת את רול ה־Mute אבל לא הצלחתי להפעיל Mute אמיתי, ולכן ביטלתי את הפעולה.\n" +
+              `שגיאה: \`${error.code || error.message}\``,
+            ephemeral: true
+          });
+        }
 
         addModTimer({
           guildId: interaction.guild.id,
@@ -941,8 +976,8 @@ client.on(Events.InteractionCreate, async interaction => {
 
         return replyToInteraction(interaction, {
           content:
-            `✅ ${user} קיבל Mute ל־**${formatDuration(duration)}**.\n` +
-            "הבוט יסיר את המיוט לבד כשהזמן יסתיים.",
+            `✅ ${user} קיבל Mute אמיתי ל־**${formatDuration(duration)}**.\n` +
+            "הופעל גם Discord Timeout וגם רול Mute. בסוף הזמן ה־Timeout יסתיים והרול יוסר אוטומטית.",
           ephemeral: true
         });
       }
@@ -985,6 +1020,15 @@ client.on(Events.InteractionCreate, async interaction => {
           `${reason} | by ${interaction.user.tag}`
         );
 
+        if (member.moderatable) {
+          await member.timeout(
+            null,
+            `${reason} | Zone X unmute by ${interaction.user.tag}`
+          ).catch(error => {
+            console.error("❌ Unmute timeout clear error:", error);
+          });
+        }
+
         removeModTimer(
           interaction.guild.id,
           user.id,
@@ -1005,7 +1049,7 @@ client.on(Events.InteractionCreate, async interaction => {
         );
 
         return replyToInteraction(interaction, {
-          content: `✅ ה־Mute הוסר מ־${user}.`,
+          content: `✅ ה־Mute הוסר מ־${user} — גם הרול וגם ה־Timeout.`,
           ephemeral: true
         });
       }
