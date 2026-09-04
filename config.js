@@ -59,21 +59,21 @@ module.exports = {
       name: "Zone X Supporter",
       emoji: "💙",
       price: 2500,
-      roleId: "PUT_XP_SHOP_ROLE_1_ID_HERE"
+      roleId: "1545456740164829234"
     },
     {
       key: "elite",
       name: "Zone X Elite",
       emoji: "💎",
       price: 5000,
-      roleId: "PUT_XP_SHOP_ROLE_2_ID_HERE"
+      roleId: "1545457055140155476"
     },
     {
       key: "legend",
       name: "Zone X Legend",
       emoji: "👑",
       price: 10000,
-      roleId: "PUT_XP_SHOP_ROLE_3_ID_HERE"
+      roleId: "1545457287932416161"
     }
   ]
 };
