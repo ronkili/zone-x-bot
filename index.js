@@ -307,6 +307,47 @@ function validateBet(userId, rawAmount) {
   };
 }
 
+function buildHelpRequestEmbed(
+  user,
+  reason,
+  requestId,
+  handler = null
+) {
+  return new EmbedBuilder()
+    .setColor(handler ? "Green" : "DarkGreen")
+    .setTitle("🚨 בקשת עזרה חדשה")
+    .addFields(
+      {
+        name: "משתמש:",
+        value: `${user}`,
+        inline: false
+      },
+      {
+        name: "סיבה:",
+        value: reason || "לא צוינה סיבה",
+        inline: false
+      },
+      {
+        name: "סטטוס:",
+        value: handler
+          ? "✅ נמצא בטיפול"
+          : "❌ לא נמצא בטיפול",
+        inline: false
+      },
+      {
+        name: "סטטוס טיפול:",
+        value: handler
+          ? `✅ בטיפול על ידי ${handler}`
+          : "❌ אף אחד",
+        inline: false
+      }
+    )
+    .setFooter({
+      text: `ID: ${requestId}`
+    })
+    .setTimestamp();
+}
+
 function buildXpHelpEmbed() {
   return new EmbedBuilder()
     .setColor("Blue")
@@ -828,6 +869,7 @@ client.on(Events.MessageCreate, async message => {
 
     if (
       [
+        "h",
         "xphelp",
         "xp",
         "balance",
@@ -841,6 +883,46 @@ client.on(Events.MessageCreate, async message => {
       ].includes(command) === false
     ) {
       return;
+    }
+
+    if (command === "h") {
+      const reason =
+        args.join(" ").trim() ||
+        "לא צוינה סיבה";
+
+      const requestId =
+        Date.now().toString();
+
+      const row =
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(
+              `take_help_request:${message.author.id}:${requestId}`
+            )
+            .setLabel("בטיפול")
+            .setStyle(ButtonStyle.Primary)
+        );
+
+      return message.channel.send({
+        content:
+          config.staffRoleId
+            ? `<@&${config.staffRoleId}>`
+            : undefined,
+        embeds: [
+          buildHelpRequestEmbed(
+            message.author,
+            reason,
+            requestId
+          )
+        ],
+        components: [row],
+        allowedMentions:
+          config.staffRoleId
+            ? {
+                roles: [config.staffRoleId]
+              }
+            : undefined
+      });
     }
 
     if (command === "xphelp") {
@@ -2173,6 +2255,63 @@ client.on(Events.InteractionCreate, async interaction => {
     }
 
     if (!interaction.isButton()) return;
+
+    if (
+      interaction.customId.startsWith(
+        "take_help_request:"
+      )
+    ) {
+      if (!isStaff(interaction.member)) {
+        return interaction.reply({
+          content:
+            "❌ רק צוות יכול לקחת בקשות עזרה.",
+          ephemeral: true
+        });
+      }
+
+      const [
+        ,
+        requesterId,
+        requestId
+      ] = interaction.customId.split(":");
+
+      const requester =
+        await interaction.guild.members
+          .fetch(requesterId)
+          .catch(() => null);
+
+      const reason =
+        interaction.message.embeds[0]
+          ?.fields
+          ?.find(
+            field => field.name === "סיבה:"
+          )
+          ?.value ||
+        "לא צוינה סיבה";
+
+      const claimedRow =
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(
+              `take_help_request:${requesterId}:${requestId}`
+            )
+            .setLabel("בטיפול")
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(true)
+        );
+
+      return interaction.update({
+        embeds: [
+          buildHelpRequestEmbed(
+            requester || `<@${requesterId}>`,
+            reason,
+            requestId,
+            interaction.user
+          )
+        ],
+        components: [claimedRow]
+      });
+    }
 
     if (interaction.customId.startsWith("xp_shop_buy:")) {
       const itemKey = interaction.customId.slice(
