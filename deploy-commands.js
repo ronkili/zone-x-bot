@@ -58,6 +58,10 @@ const commands = [
       PermissionFlagsBits.ManageGuild
     ),
 
+  new SlashCommandBuilder()
+    .setName("setup-xp-shop")
+    .setDescription("שולח את פאנל ה־XP Shop של Zone X"),
+
   userReasonCommand("warn", "נותן אזהרה למשתמש"),
 
   userReasonCommand(
