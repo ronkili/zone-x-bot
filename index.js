@@ -25,6 +25,7 @@ const config = require("./config");
 const DATA_DIR = path.join(__dirname, "data");
 const MOD_TIMERS_FILE = path.join(DATA_DIR, "mod-timers.json");
 const XP_FILE = path.join(DATA_DIR, "xp.json");
+const WARNINGS_FILE = path.join(DATA_DIR, "warns.json");
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -53,6 +54,10 @@ const modTimers = loadJson(MOD_TIMERS_FILE, {});
 const xpData = loadJson(XP_FILE, {
   users: {},
   cooldowns: {}
+});
+
+const warningsData = loadJson(WARNINGS_FILE, {
+  guilds: {}
 });
 
 const client = new Client({
@@ -168,6 +173,221 @@ function buildModEmbed(title, color, fields) {
 async function getGuildMember(interaction, user) {
   return interaction.guild.members.fetch(user.id).catch(() => null);
 }
+
+// =====================
+// WARNS SYSTEM
+// =====================
+
+const WARN_PUNISHMENTS = {
+  3: {
+    duration: 60 * 60 * 1000,
+    label: "שעה"
+  },
+  5: {
+    duration: 24 * 60 * 60 * 1000,
+    label: "יום"
+  },
+  7: {
+    duration: 7 * 24 * 60 * 60 * 1000,
+    label: "7 ימים"
+  }
+};
+
+function saveWarningsData() {
+  saveJson(WARNINGS_FILE, warningsData);
+}
+
+function getGuildWarnings(guildId) {
+  if (!warningsData.guilds[guildId]) {
+    warningsData.guilds[guildId] = {
+      nextId: 1,
+      users: {}
+    };
+  }
+
+  return warningsData.guilds[guildId];
+}
+
+function getUserWarnings(guildId, userId) {
+  const guildData = getGuildWarnings(guildId);
+
+  if (!guildData.users[userId]) {
+    guildData.users[userId] = {
+      warns: [],
+      triggeredPunishments: []
+    };
+  }
+
+  const userData = guildData.users[userId];
+
+  if (!Array.isArray(userData.warns)) {
+    userData.warns = [];
+  }
+
+  if (!Array.isArray(userData.triggeredPunishments)) {
+    userData.triggeredPunishments = [];
+  }
+
+  return userData;
+}
+
+function createWarning({
+  guildId,
+  userId,
+  moderatorId,
+  reason
+}) {
+  const guildData = getGuildWarnings(guildId);
+  const userData = getUserWarnings(guildId, userId);
+
+  const number = Number(guildData.nextId) || 1;
+  const id = `W${String(number).padStart(4, "0")}`;
+
+  guildData.nextId = number + 1;
+
+  const warning = {
+    id,
+    userId,
+    moderatorId,
+    reason,
+    createdAt: Date.now()
+  };
+
+  userData.warns.push(warning);
+  saveWarningsData();
+
+  return warning;
+}
+
+function removeWarning(guildId, userId, warningId) {
+  const userData = getUserWarnings(guildId, userId);
+
+  const normalizedId = String(warningId || "")
+    .trim()
+    .toUpperCase();
+
+  const index = userData.warns.findIndex(
+    warn => String(warn.id).toUpperCase() === normalizedId
+  );
+
+  if (index === -1) {
+    return null;
+  }
+
+  const [removed] = userData.warns.splice(index, 1);
+
+  const currentCount = userData.warns.length;
+
+  userData.triggeredPunishments =
+    userData.triggeredPunishments.filter(
+      threshold => Number(threshold) <= currentCount
+    );
+
+  saveWarningsData();
+  return removed;
+}
+
+function clearUserWarnings(guildId, userId) {
+  const userData = getUserWarnings(guildId, userId);
+  const removedCount = userData.warns.length;
+
+  userData.warns = [];
+  userData.triggeredPunishments = [];
+
+  saveWarningsData();
+  return removedCount;
+}
+
+function warningListText(warns) {
+  if (!warns.length) {
+    return "אין אזהרות פעילות.";
+  }
+
+  const visible = warns.slice(-10).reverse();
+
+  const lines = visible.map(warn => {
+    const timestamp = Math.floor(
+      Number(warn.createdAt || Date.now()) / 1000
+    );
+
+    const shortReason = String(
+      warn.reason || "לא צוינה סיבה"
+    ).slice(0, 160);
+
+    return (
+      `**${warn.id}** • ${shortReason}\n` +
+      `צוות: <@${warn.moderatorId}> • <t:${timestamp}:R>`
+    );
+  });
+
+  if (warns.length > visible.length) {
+    lines.push(
+      `\nמוצגות 10 האזהרות האחרונות מתוך ${warns.length}.`
+    );
+  }
+
+  return lines.join("\n\n");
+}
+
+async function applyWarnPunishment(
+  guild,
+  member,
+  userData,
+  moderator
+) {
+  const count = userData.warns.length;
+  const punishment = WARN_PUNISHMENTS[count];
+
+  if (!punishment) {
+    return null;
+  }
+
+  if (
+    userData.triggeredPunishments.includes(count)
+  ) {
+    return null;
+  }
+
+  userData.triggeredPunishments.push(count);
+  saveWarningsData();
+
+  if (!member?.moderatable) {
+    return {
+      applied: false,
+      count,
+      label: punishment.label,
+      reason:
+        "הבוט לא יכול לתת Timeout למשתמש הזה."
+    };
+  }
+
+  try {
+    await member.timeout(
+      punishment.duration,
+      `Zone X auto punishment: ${count} warns | Staff: ${moderator.tag}`
+    );
+
+    return {
+      applied: true,
+      count,
+      label: punishment.label
+    };
+  } catch (error) {
+    console.error(
+      "❌ Automatic warn punishment error:",
+      error
+    );
+
+    return {
+      applied: false,
+      count,
+      label: punishment.label,
+      reason:
+        error.code || error.message || "Unknown error"
+    };
+  }
+}
+
 
 // =====================
 // XP + SHOP + PREFIX GAMES
@@ -1638,6 +1858,9 @@ client.on(Events.InteractionCreate, async interaction => {
 
       const moderationCommands = [
         "warn",
+        "warnings",
+        "remove-warn",
+        "clear-warns",
         "mute",
         "unmute",
         "timeout",
@@ -1657,23 +1880,87 @@ client.on(Events.InteractionCreate, async interaction => {
       }
 
       if (interaction.commandName === "warn") {
-        const user = interaction.options.getUser("user");
+        const user =
+          interaction.options.getUser("user");
+
         const reason =
           interaction.options.getString("reason") ||
           "לא צוינה סיבה";
 
-        const member = await getGuildMember(interaction, user);
+        const member =
+          await getGuildMember(
+            interaction,
+            user
+          );
 
         if (!member) {
           return replyToInteraction(interaction, {
-            content: "❌ המשתמש לא נמצא בשרת.",
+            content:
+              "❌ המשתמש לא נמצא בשרת.",
             ephemeral: true
           });
         }
 
+        if (user.bot) {
+          return replyToInteraction(interaction, {
+            content:
+              "❌ אי אפשר לתת Warn לבוט.",
+            ephemeral: true
+          });
+        }
+
+        if (user.id === interaction.user.id) {
+          return replyToInteraction(interaction, {
+            content:
+              "❌ אי אפשר לתת Warn לעצמך.",
+            ephemeral: true
+          });
+        }
+
+        const warning = createWarning({
+          guildId: interaction.guild.id,
+          userId: user.id,
+          moderatorId: interaction.user.id,
+          reason
+        });
+
+        const userWarnData =
+          getUserWarnings(
+            interaction.guild.id,
+            user.id
+          );
+
+        const warnCount =
+          userWarnData.warns.length;
+
+        const autoPunishment =
+          await applyWarnPunishment(
+            interaction.guild,
+            member,
+            userWarnData,
+            interaction.user
+          );
+
+        let punishmentText = "";
+
+        if (autoPunishment?.applied) {
+          punishmentText =
+            `\n⏳ עונש אוטומטי: Timeout ל־**${autoPunishment.label}**.`;
+        } else if (
+          autoPunishment &&
+          !autoPunishment.applied
+        ) {
+          punishmentText =
+            `\n⚠️ הגיע לסף של ${autoPunishment.count} Warns, ` +
+            "אבל לא הצלחתי לתת Timeout אוטומטי.";
+        }
+
         await user.send(
           `⚠️ קיבלת אזהרה בשרת **${interaction.guild.name}**.\n` +
-          `סיבה: ${reason}`
+          `ID: **${warning.id}**\n` +
+          `סיבה: ${reason}\n` +
+          `סה"כ Warns פעילים: **${warnCount}**` +
+          punishmentText
         ).catch(() => {});
 
         await sendModLog(
@@ -1682,15 +1969,257 @@ client.on(Events.InteractionCreate, async interaction => {
             "⚠️ Warn",
             "Yellow",
             [
-              { name: "משתמש", value: `${user}` },
-              { name: "צוות", value: `${interaction.user}` },
-              { name: "סיבה", value: reason }
+              {
+                name: "משתמש",
+                value: `${user}`
+              },
+              {
+                name: "צוות",
+                value: `${interaction.user}`
+              },
+              {
+                name: "Warn ID",
+                value: warning.id
+              },
+              {
+                name: "סיבה",
+                value: reason
+              },
+              {
+                name: "Warns פעילים",
+                value: `${warnCount}`
+              },
+              {
+                name: "עונש אוטומטי",
+                value:
+                  autoPunishment?.applied
+                    ? `Timeout ל־${autoPunishment.label}`
+                    : (
+                        autoPunishment
+                          ? "הגיע לסף, אך ה־Timeout נכשל"
+                          : "אין"
+                      )
+              }
             ]
           )
         );
 
         return replyToInteraction(interaction, {
-          content: `✅ ${user} קיבל אזהרה.`,
+          content:
+            `✅ ${user} קיבל Warn **${warning.id}**.\n` +
+            `📊 יש לו עכשיו **${warnCount} Warns**.` +
+            punishmentText,
+          ephemeral: true
+        });
+      }
+
+      if (
+        interaction.commandName ===
+        "warnings"
+      ) {
+        const user =
+          interaction.options.getUser("user");
+
+        const member =
+          await getGuildMember(
+            interaction,
+            user
+          );
+
+        if (!member) {
+          return replyToInteraction(interaction, {
+            content:
+              "❌ המשתמש לא נמצא בשרת.",
+            ephemeral: true
+          });
+        }
+
+        const userWarnData =
+          getUserWarnings(
+            interaction.guild.id,
+            user.id
+          );
+
+        const embed =
+          new EmbedBuilder()
+            .setColor(
+              userWarnData.warns.length
+                ? "Yellow"
+                : "Green"
+            )
+            .setTitle(
+              `⚠️ Warns — ${user.username}`
+            )
+            .setThumbnail(
+              user.displayAvatarURL()
+            )
+            .setDescription(
+              warningListText(
+                userWarnData.warns
+              )
+            )
+            .addFields({
+              name: "סה״כ Warns פעילים",
+              value:
+                `**${userWarnData.warns.length}**`,
+              inline: true
+            })
+            .setTimestamp();
+
+        return replyToInteraction(interaction, {
+          embeds: [embed],
+          ephemeral: true
+        });
+      }
+
+      if (
+        interaction.commandName ===
+        "remove-warn"
+      ) {
+        const user =
+          interaction.options.getUser("user");
+
+        const warningId =
+          interaction.options.getString("id");
+
+        const member =
+          await getGuildMember(
+            interaction,
+            user
+          );
+
+        if (!member) {
+          return replyToInteraction(interaction, {
+            content:
+              "❌ המשתמש לא נמצא בשרת.",
+            ephemeral: true
+          });
+        }
+
+        const removed =
+          removeWarning(
+            interaction.guild.id,
+            user.id,
+            warningId
+          );
+
+        if (!removed) {
+          return replyToInteraction(interaction, {
+            content:
+              `❌ לא מצאתי Warn עם ID **${String(warningId).toUpperCase()}** אצל ${user}.`,
+            ephemeral: true
+          });
+        }
+
+        const remaining =
+          getUserWarnings(
+            interaction.guild.id,
+            user.id
+          ).warns.length;
+
+        await sendModLog(
+          interaction.guild,
+          buildModEmbed(
+            "🗑️ Warn Removed",
+            "Orange",
+            [
+              {
+                name: "משתמש",
+                value: `${user}`
+              },
+              {
+                name: "צוות",
+                value: `${interaction.user}`
+              },
+              {
+                name: "Warn ID",
+                value: removed.id
+              },
+              {
+                name: "סיבה מקורית",
+                value:
+                  removed.reason ||
+                  "לא צוינה סיבה"
+              },
+              {
+                name: "Warns שנותרו",
+                value: `${remaining}`
+              }
+            ]
+          )
+        );
+
+        await user.send(
+          `🗑️ Warn **${removed.id}** הוסר לך בשרת **${interaction.guild.name}**.\n` +
+          `נשארו לך **${remaining} Warns**.`
+        ).catch(() => {});
+
+        return replyToInteraction(interaction, {
+          content:
+            `✅ Warn **${removed.id}** הוסר מ־${user}.\n` +
+            `נשארו לו **${remaining} Warns**.`,
+          ephemeral: true
+        });
+      }
+
+      if (
+        interaction.commandName ===
+        "clear-warns"
+      ) {
+        const user =
+          interaction.options.getUser("user");
+
+        const member =
+          await getGuildMember(
+            interaction,
+            user
+          );
+
+        if (!member) {
+          return replyToInteraction(interaction, {
+            content:
+              "❌ המשתמש לא נמצא בשרת.",
+            ephemeral: true
+          });
+        }
+
+        const removedCount =
+          clearUserWarnings(
+            interaction.guild.id,
+            user.id
+          );
+
+        await sendModLog(
+          interaction.guild,
+          buildModEmbed(
+            "🧹 Warns Cleared",
+            "Red",
+            [
+              {
+                name: "משתמש",
+                value: `${user}`
+              },
+              {
+                name: "צוות",
+                value: `${interaction.user}`
+              },
+              {
+                name: "Warns שנמחקו",
+                value: `${removedCount}`
+              }
+            ]
+          )
+        );
+
+        await user.send(
+          `🧹 כל ה־Warns שלך נוקו בשרת **${interaction.guild.name}**.`
+        ).catch(() => {});
+
+        return replyToInteraction(interaction, {
+          content:
+            removedCount
+              ? `✅ נמחקו **${removedCount} Warns** מ־${user}.`
+              : `ℹ️ ל־${user} לא היו Warns פעילים.`,
           ephemeral: true
         });
       }
