@@ -64,6 +64,42 @@ const commands = [
 
   userReasonCommand("warn", "נותן אזהרה למשתמש"),
 
+  new SlashCommandBuilder()
+    .setName("warnings")
+    .setDescription("מציג את כל ה-Warns של משתמש")
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription("המשתמש לבדיקה")
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("remove-warn")
+    .setDescription("מסיר Warn ספציפי ממשתמש")
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription("המשתמש")
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option
+        .setName("id")
+        .setDescription("Warn ID, לדוגמה W0001")
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("clear-warns")
+    .setDescription("מוחק את כל ה-Warns של משתמש")
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription("המשתמש")
+        .setRequired(true)
+    ),
+
   userReasonCommand(
     "mute",
     "נותן Chat Mute זמני למשתמש",
