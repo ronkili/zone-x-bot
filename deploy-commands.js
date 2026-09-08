@@ -75,7 +75,7 @@ const commands = [
     ),
 
   new SlashCommandBuilder()
-    .setName("remove-warn")
+    .setName("unwarn")
     .setDescription("מסיר Warn ספציפי ממשתמש")
     .addUserOption(option =>
       option
@@ -102,12 +102,22 @@ const commands = [
 
   userReasonCommand(
     "mute",
+    "נותן Voice Mute למשתמש"
+  ),
+
+  userReasonCommand(
+    "unvoice-mute",
+    "מסיר Voice Mute ממשתמש"
+  ),
+
+  userReasonCommand(
+    "chat-mute",
     "נותן Chat Mute זמני למשתמש",
     true
   ),
 
   userReasonCommand(
-    "unmute",
+    "un-chat-mute",
     "מסיר Chat Mute ממשתמש"
   ),
 
