@@ -24,8 +24,25 @@ function userReasonCommand(name, description, withDuration = false) {
     command.addStringOption(option =>
       option
         .setName("duration")
-        .setDescription("זמן: 30s / 10m / 2h / 3d")
+        .setDescription("בחר לכמה זמן")
         .setRequired(true)
+        .addChoices(
+          { name: "10 שניות", value: "10s" },
+          { name: "30 שניות", value: "30s" },
+          { name: "דקה", value: "1m" },
+          { name: "5 דקות", value: "5m" },
+          { name: "10 דקות", value: "10m" },
+          { name: "30 דקות", value: "30m" },
+          { name: "שעה", value: "1h" },
+          { name: "שעתיים", value: "2h" },
+          { name: "6 שעות", value: "6h" },
+          { name: "12 שעות", value: "12h" },
+          { name: "יום", value: "1d" },
+          { name: "3 ימים", value: "3d" },
+          { name: "7 ימים", value: "7d" },
+          { name: "14 ימים", value: "14d" },
+          { name: "28 ימים", value: "28d" }
+        )
     );
   }
 
@@ -102,7 +119,8 @@ const commands = [
 
   userReasonCommand(
     "mute",
-    "נותן Voice Mute למשתמש"
+    "נותן Voice Mute זמני למשתמש",
+    true
   ),
 
   userReasonCommand(
