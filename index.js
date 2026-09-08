@@ -1247,6 +1247,42 @@ async function checkModTimers() {
             )
           );
         }
+      } else if (timer.type === "voice-mute") {
+        if (
+          member &&
+          member.voice.channelId &&
+          member.voice.serverMute
+        ) {
+          await member.voice.setMute(
+            false,
+            "Zone X automatic voice mute expiration"
+          ).catch(error => {
+            console.error(
+              "❌ Auto voice unmute error:",
+              error
+            );
+          });
+
+          await sendModLog(
+            guild,
+            buildModEmbed(
+              "🔊 Voice Mute הסתיים אוטומטית",
+              "Green",
+              [
+                {
+                  name: "משתמש",
+                  value: `<@${timer.userId}>`
+                },
+                {
+                  name: "סיבה מקורית",
+                  value:
+                    timer.reason ||
+                    "לא צוינה סיבה"
+                }
+              ]
+            )
+          );
+        }
       }
 
       delete modTimers[key];
@@ -2230,9 +2266,25 @@ client.on(Events.InteractionCreate, async interaction => {
         const user =
           interaction.options.getUser("user");
 
+        const durationText =
+          interaction.options.getString(
+            "duration"
+          );
+
         const reason =
           interaction.options.getString("reason") ||
           "לא צוינה סיבה";
+
+        const duration =
+          parseDuration(durationText, 28);
+
+        if (!duration) {
+          return replyToInteraction(interaction, {
+            content:
+              "❌ זמן לא תקין. בחר זמן מתוך הרשימה.",
+            ephemeral: true
+          });
+        }
 
         const member =
           await getGuildMember(
@@ -2317,6 +2369,15 @@ client.on(Events.InteractionCreate, async interaction => {
           });
         }
 
+        addModTimer({
+          guildId: interaction.guild.id,
+          userId: user.id,
+          type: "voice-mute",
+          expiresAt: Date.now() + duration,
+          reason,
+          moderatorId: interaction.user.id
+        });
+
         await sendModLog(
           interaction.guild,
           buildModEmbed(
@@ -2326,6 +2387,10 @@ client.on(Events.InteractionCreate, async interaction => {
               {
                 name: "משתמש",
                 value: `${user}`
+              },
+              {
+                name: "זמן",
+                value: formatDuration(duration)
               },
               {
                 name: "צוות",
@@ -2341,8 +2406,8 @@ client.on(Events.InteractionCreate, async interaction => {
 
         return replyToInteraction(interaction, {
           content:
-            `✅ ${user} קיבל **Voice Mute**.\n` +
-            "הוא לא יכול לדבר בשיחה קולית, אבל הצ׳אט שלו לא נחסם.",
+            `✅ ${user} קיבל **Voice Mute** ל־**${formatDuration(duration)}**.\n` +
+            "הוא לא יכול לדבר ב־Voice, אבל יכול להשתמש בצ׳אט.",
           ephemeral: true
         });
       }
@@ -2416,6 +2481,12 @@ client.on(Events.InteractionCreate, async interaction => {
             ephemeral: true
           });
         }
+
+        removeModTimer(
+          interaction.guild.id,
+          user.id,
+          "voice-mute"
+        );
 
         await sendModLog(
           interaction.guild,
