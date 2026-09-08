@@ -1859,10 +1859,12 @@ client.on(Events.InteractionCreate, async interaction => {
       const moderationCommands = [
         "warn",
         "warnings",
-        "remove-warn",
+        "unwarn",
         "clear-warns",
         "mute",
-        "unmute",
+        "unvoice-mute",
+        "chat-mute",
+        "un-chat-mute",
         "timeout",
         "untimeout",
         "kick",
@@ -2074,7 +2076,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
       if (
         interaction.commandName ===
-        "remove-warn"
+        "unwarn"
       ) {
         const user =
           interaction.options.getUser("user");
@@ -2225,21 +2227,251 @@ client.on(Events.InteractionCreate, async interaction => {
       }
 
       if (interaction.commandName === "mute") {
-        if (!config.muteRoleId) {
-          return replyToInteraction(interaction, {
-            content: "❌ חסר `muteRoleId` ב־config.js.",
-            ephemeral: true
-          });
-        }
+        const user =
+          interaction.options.getUser("user");
 
-        const user = interaction.options.getUser("user");
-        const durationText =
-          interaction.options.getString("duration");
         const reason =
           interaction.options.getString("reason") ||
           "לא צוינה סיבה";
 
-        const duration = parseDuration(durationText, 28);
+        const member =
+          await getGuildMember(
+            interaction,
+            user
+          );
+
+        if (!member) {
+          return replyToInteraction(interaction, {
+            content:
+              "❌ המשתמש לא נמצא בשרת.",
+            ephemeral: true
+          });
+        }
+
+        if (!member.voice.channelId) {
+          return replyToInteraction(interaction, {
+            content:
+              "❌ המשתמש לא נמצא כרגע בשיחה קולית.",
+            ephemeral: true
+          });
+        }
+
+        if (
+          member.id === interaction.guild.ownerId
+        ) {
+          return replyToInteraction(interaction, {
+            content:
+              "❌ אי אפשר לעשות Voice Mute לבעל השרת.",
+            ephemeral: true
+          });
+        }
+
+        if (
+          member.permissions.has(
+            PermissionFlagsBits.Administrator
+          ) &&
+          interaction.guild.ownerId !==
+            interaction.user.id
+        ) {
+          return replyToInteraction(interaction, {
+            content:
+              "❌ רק בעל השרת יכול לעשות Voice Mute לאדמין.",
+            ephemeral: true
+          });
+        }
+
+        const botMember =
+          await interaction.guild.members
+            .fetchMe()
+            .catch(() => null);
+
+        if (
+          !botMember ||
+          !botMember.permissions.has(
+            PermissionFlagsBits.MuteMembers
+          )
+        ) {
+          return replyToInteraction(interaction, {
+            content:
+              "❌ לבוט אין `Mute Members`.",
+            ephemeral: true
+          });
+        }
+
+        try {
+          await member.voice.setMute(
+            true,
+            `${reason} | Zone X voice mute by ${interaction.user.tag}`
+          );
+        } catch (error) {
+          console.error(
+            "❌ Voice mute error:",
+            error
+          );
+
+          return replyToInteraction(interaction, {
+            content:
+              "❌ לא הצלחתי לעשות Voice Mute למשתמש.\n" +
+              `שגיאה: \`${error.code || error.message}\``,
+            ephemeral: true
+          });
+        }
+
+        await sendModLog(
+          interaction.guild,
+          buildModEmbed(
+            "🔇 Voice Mute",
+            "Orange",
+            [
+              {
+                name: "משתמש",
+                value: `${user}`
+              },
+              {
+                name: "צוות",
+                value: `${interaction.user}`
+              },
+              {
+                name: "סיבה",
+                value: reason
+              }
+            ]
+          )
+        );
+
+        return replyToInteraction(interaction, {
+          content:
+            `✅ ${user} קיבל **Voice Mute**.\n` +
+            "הוא לא יכול לדבר בשיחה קולית, אבל הצ׳אט שלו לא נחסם.",
+          ephemeral: true
+        });
+      }
+
+      if (
+        interaction.commandName ===
+        "unvoice-mute"
+      ) {
+        const user =
+          interaction.options.getUser("user");
+
+        const reason =
+          interaction.options.getString("reason") ||
+          "הוסר ידנית";
+
+        const member =
+          await getGuildMember(
+            interaction,
+            user
+          );
+
+        if (!member) {
+          return replyToInteraction(interaction, {
+            content:
+              "❌ המשתמש לא נמצא בשרת.",
+            ephemeral: true
+          });
+        }
+
+        if (!member.voice.channelId) {
+          return replyToInteraction(interaction, {
+            content:
+              "❌ המשתמש לא נמצא כרגע בשיחה קולית.",
+            ephemeral: true
+          });
+        }
+
+        const botMember =
+          await interaction.guild.members
+            .fetchMe()
+            .catch(() => null);
+
+        if (
+          !botMember ||
+          !botMember.permissions.has(
+            PermissionFlagsBits.MuteMembers
+          )
+        ) {
+          return replyToInteraction(interaction, {
+            content:
+              "❌ לבוט אין `Mute Members`.",
+            ephemeral: true
+          });
+        }
+
+        try {
+          await member.voice.setMute(
+            false,
+            `${reason} | Zone X voice unmute by ${interaction.user.tag}`
+          );
+        } catch (error) {
+          console.error(
+            "❌ Voice unmute error:",
+            error
+          );
+
+          return replyToInteraction(interaction, {
+            content:
+              "❌ לא הצלחתי להסיר את ה־Voice Mute.\n" +
+              `שגיאה: \`${error.code || error.message}\``,
+            ephemeral: true
+          });
+        }
+
+        await sendModLog(
+          interaction.guild,
+          buildModEmbed(
+            "🔊 Voice Unmute",
+            "Green",
+            [
+              {
+                name: "משתמש",
+                value: `${user}`
+              },
+              {
+                name: "צוות",
+                value: `${interaction.user}`
+              },
+              {
+                name: "סיבה",
+                value: reason
+              }
+            ]
+          )
+        );
+
+        return replyToInteraction(interaction, {
+          content:
+            `✅ ה־Voice Mute הוסר מ־${user}.`,
+          ephemeral: true
+        });
+      }
+
+      if (
+        interaction.commandName ===
+        "chat-mute"
+      ) {
+        if (!config.muteRoleId) {
+          return replyToInteraction(interaction, {
+            content:
+              "❌ חסר `muteRoleId` ב־config.js.",
+            ephemeral: true
+          });
+        }
+
+        const user =
+          interaction.options.getUser("user");
+
+        const durationText =
+          interaction.options.getString(
+            "duration"
+          );
+
+        const reason =
+          interaction.options.getString("reason") ||
+          "לא צוינה סיבה";
+
+        const duration =
+          parseDuration(durationText, 28);
 
         if (!duration) {
           return replyToInteraction(interaction, {
@@ -2250,62 +2482,69 @@ client.on(Events.InteractionCreate, async interaction => {
           });
         }
 
-        const member = await getGuildMember(interaction, user);
+        const member =
+          await getGuildMember(
+            interaction,
+            user
+          );
 
         if (!member) {
           return replyToInteraction(interaction, {
-            content: "❌ המשתמש לא נמצא בשרת.",
+            content:
+              "❌ המשתמש לא נמצא בשרת.",
             ephemeral: true
           });
         }
 
         if (
-          member.permissions.has(PermissionFlagsBits.Administrator) &&
-          interaction.guild.ownerId !== interaction.user.id
+          member.permissions.has(
+            PermissionFlagsBits.Administrator
+          ) &&
+          interaction.guild.ownerId !==
+            interaction.user.id
         ) {
           return replyToInteraction(interaction, {
-            content: "❌ אי אפשר לעשות Mute לאדמין.",
+            content:
+              "❌ אי אפשר לעשות Chat Mute לאדמין.",
             ephemeral: true
           });
         }
 
-        const muteRole = await interaction.guild.roles
-          .fetch(config.muteRoleId)
-          .catch(() => null);
+        const muteRole =
+          await interaction.guild.roles
+            .fetch(config.muteRoleId)
+            .catch(() => null);
 
         if (!muteRole) {
           return replyToInteraction(interaction, {
-            content: "❌ לא מצאתי את רול ה־Mute.",
+            content:
+              "❌ לא מצאתי את רול ה־Mute.",
             ephemeral: true
           });
         }
 
-        const botMember = await interaction.guild.members.fetchMe();
+        const botMember =
+          await interaction.guild.members
+            .fetchMe()
+            .catch(() => null);
 
-        if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
+        if (
+          !botMember ||
+          !botMember.permissions.has(
+            PermissionFlagsBits.ManageRoles
+          )
+        ) {
           return replyToInteraction(interaction, {
-            content: "❌ לבוט אין `Manage Roles`.",
-            ephemeral: true
-          });
-        }
-
-        if (!botMember.permissions.has(PermissionFlagsBits.ModerateMembers)) {
-          return replyToInteraction(interaction, {
-            content: "❌ לבוט אין `Moderate Members`, ולכן הוא לא יכול להפעיל Mute אמיתי.",
-            ephemeral: true
-          });
-        }
-
-        if (!member.moderatable) {
-          return replyToInteraction(interaction, {
-            content: "❌ אי אפשר לעשות Mute למשתמש הזה. בדוק שהרול של הבוט מעל הרול שלו.",
+            content:
+              "❌ לבוט אין `Manage Roles`.",
             ephemeral: true
           });
         }
 
         if (
           muteRole.managed ||
-          muteRole.position >= botMember.roles.highest.position
+          muteRole.position >=
+            botMember.roles.highest.position
         ) {
           return replyToInteraction(interaction, {
             content:
@@ -2315,27 +2554,30 @@ client.on(Events.InteractionCreate, async interaction => {
           });
         }
 
-        await member.roles.add(
-          muteRole,
-          `${reason} | by ${interaction.user.tag}`
-        );
+        if (
+          member.roles.cache.has(muteRole.id)
+        ) {
+          return replyToInteraction(interaction, {
+            content:
+              `ℹ️ ל־${user} כבר יש Chat Mute.`,
+            ephemeral: true
+          });
+        }
 
         try {
-          await member.timeout(
-            duration,
-            `${reason} | Zone X mute by ${interaction.user.tag}`
+          await member.roles.add(
+            muteRole,
+            `${reason} | Zone X chat mute by ${interaction.user.tag}`
           );
         } catch (error) {
-          await member.roles.remove(
-            muteRole,
-            "Zone X mute rollback because timeout failed"
-          ).catch(() => {});
-
-          console.error("❌ Mute timeout error:", error);
+          console.error(
+            "❌ Chat mute role error:",
+            error
+          );
 
           return replyToInteraction(interaction, {
             content:
-              "❌ הצלחתי לתת את רול ה־Mute אבל לא הצלחתי להפעיל Mute אמיתי, ולכן ביטלתי את הפעולה.\n" +
+              "❌ לא הצלחתי לתת את רול ה־Chat Mute.\n" +
               `שגיאה: \`${error.code || error.message}\``,
             ephemeral: true
           });
@@ -2353,69 +2595,116 @@ client.on(Events.InteractionCreate, async interaction => {
         await sendModLog(
           interaction.guild,
           buildModEmbed(
-            "🔇 Chat Mute",
+            "💬 Chat Mute",
             "Orange",
             [
-              { name: "משתמש", value: `${user}` },
-              { name: "זמן", value: formatDuration(duration) },
-              { name: "צוות", value: `${interaction.user}` },
-              { name: "סיבה", value: reason }
+              {
+                name: "משתמש",
+                value: `${user}`
+              },
+              {
+                name: "זמן",
+                value:
+                  formatDuration(duration)
+              },
+              {
+                name: "צוות",
+                value: `${interaction.user}`
+              },
+              {
+                name: "סיבה",
+                value: reason
+              }
             ]
           )
         );
 
         return replyToInteraction(interaction, {
           content:
-            `✅ ${user} קיבל Mute אמיתי ל־**${formatDuration(duration)}**.\n` +
-            "הופעל גם Discord Timeout וגם רול Mute. בסוף הזמן ה־Timeout יסתיים והרול יוסר אוטומטית.",
+            `✅ ${user} קיבל **Chat Mute** ל־**${formatDuration(duration)}**.\n` +
+            "נוסף רק רול ה־Mute — לא הופעל Discord Timeout, ולכן הוא עדיין יכול להיכנס ל־Voice ולדבר.",
           ephemeral: true
         });
       }
 
-      if (interaction.commandName === "unmute") {
+      if (
+        interaction.commandName ===
+        "un-chat-mute"
+      ) {
         if (!config.muteRoleId) {
           return replyToInteraction(interaction, {
-            content: "❌ חסר `muteRoleId` ב־config.js.",
+            content:
+              "❌ חסר `muteRoleId` ב־config.js.",
             ephemeral: true
           });
         }
 
-        const user = interaction.options.getUser("user");
+        const user =
+          interaction.options.getUser("user");
+
         const reason =
           interaction.options.getString("reason") ||
           "הוסר ידנית";
 
-        const member = await getGuildMember(interaction, user);
+        const member =
+          await getGuildMember(
+            interaction,
+            user
+          );
 
         if (!member) {
           return replyToInteraction(interaction, {
-            content: "❌ המשתמש לא נמצא בשרת.",
+            content:
+              "❌ המשתמש לא נמצא בשרת.",
             ephemeral: true
           });
         }
 
-        const muteRole = await interaction.guild.roles
-          .fetch(config.muteRoleId)
-          .catch(() => null);
+        const muteRole =
+          await interaction.guild.roles
+            .fetch(config.muteRoleId)
+            .catch(() => null);
 
         if (!muteRole) {
           return replyToInteraction(interaction, {
-            content: "❌ לא מצאתי את רול ה־Mute.",
+            content:
+              "❌ לא מצאתי את רול ה־Mute.",
             ephemeral: true
           });
         }
 
-        await member.roles.remove(
-          muteRole,
-          `${reason} | by ${interaction.user.tag}`
-        );
+        if (
+          !member.roles.cache.has(muteRole.id)
+        ) {
+          removeModTimer(
+            interaction.guild.id,
+            user.id,
+            "chat-mute"
+          );
 
-        if (member.moderatable) {
-          await member.timeout(
-            null,
-            `${reason} | Zone X unmute by ${interaction.user.tag}`
-          ).catch(error => {
-            console.error("❌ Unmute timeout clear error:", error);
+          return replyToInteraction(interaction, {
+            content:
+              `ℹ️ ל־${user} אין Chat Mute כרגע.`,
+            ephemeral: true
+          });
+        }
+
+        try {
+          await member.roles.remove(
+            muteRole,
+            `${reason} | Zone X chat unmute by ${interaction.user.tag}`
+          );
+        } catch (error) {
+          console.error(
+            "❌ Chat unmute role error:",
+            error
+          );
+
+          return replyToInteraction(interaction, {
+            content:
+              "❌ לא הצלחתי להסיר את רול ה־Chat Mute.\n" +
+              `שגיאה: \`${error.code || error.message}\``,
+            ephemeral: true
           });
         }
 
@@ -2428,18 +2717,28 @@ client.on(Events.InteractionCreate, async interaction => {
         await sendModLog(
           interaction.guild,
           buildModEmbed(
-            "🔊 Chat Unmute",
+            "💬 Chat Unmute",
             "Green",
             [
-              { name: "משתמש", value: `${user}` },
-              { name: "צוות", value: `${interaction.user}` },
-              { name: "סיבה", value: reason }
+              {
+                name: "משתמש",
+                value: `${user}`
+              },
+              {
+                name: "צוות",
+                value: `${interaction.user}`
+              },
+              {
+                name: "סיבה",
+                value: reason
+              }
             ]
           )
         );
 
         return replyToInteraction(interaction, {
-          content: `✅ ה־Mute הוסר מ־${user} — גם הרול וגם ה־Timeout.`,
+          content:
+            `✅ ה־Chat Mute הוסר מ־${user}.`,
           ephemeral: true
         });
       }
