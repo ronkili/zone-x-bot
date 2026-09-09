@@ -999,6 +999,21 @@ function buildRankEmbed(
       role => role.id !== guild.id
     ).size;
 
+  const topText = [
+    `**#${xpPosition} ${member.displayName}** 💎 **${levelInfo.level}**`,
+    "",
+    `Total XP: **${formatXp(xp)}** (#${xpPosition})`,
+    `Next Level: **${levelInfo.progress}%**`,
+    `XP needed: **${formatXp(levelInfo.xpToNext)}**`
+  ].join("\n");
+
+  const statsText = [
+    `💬 **${formatXp(messages)}** (#${messagePosition})`,
+    `⚠️ **${warnCount}** Warns`,
+    `🚫 **${restrainingCount}** Active Orders`,
+    `🎭 **${roleCount}** Roles`
+  ].join("\n");
+
   return new EmbedBuilder()
     .setColor("Aqua")
     .setTitle("All stats in Zone X")
@@ -1007,23 +1022,15 @@ function buildRankEmbed(
         size: 256
       })
     )
-    .setDescription(
-      [
-        `**#${xpPosition} ${member.displayName}**  💎 **${levelInfo.level}**`,
-        "",
-        `**Total XP:** ${formatXp(xp)} (#${xpPosition})`,
-        `**Next Level:** ${levelInfo.progress}%`,
-        `**XP needed:** ${formatXp(levelInfo.xpToNext)}`,
-        "",
-        "**Stats**",
-        `💬 ${formatXp(messages)} (#${messagePosition})`,
-        `⚠️ ${warnCount} Warns`,
-        `🚫 ${restrainingCount} Active Orders`,
-        `🎭 ${roleCount} Roles`
-      ].join("\\n")
-    )
+    .setDescription(topText)
+    .addFields({
+      name: "Stats",
+      value: statsText,
+      inline: false
+    })
     .setFooter({
-      text: `Zone X • Rank • ${member.user.username}`
+      text:
+        `Zone X • Rank • ${member.user.username}`
     })
     .setTimestamp();
 }
@@ -2361,8 +2368,14 @@ client.on(Events.InteractionCreate, async interaction => {
   try {
     if (interaction.isChatInputCommand()) {
       // Discord requires slash commands to be acknowledged quickly.
-      // Defer immediately, then all command replies below use editReply.
-      await interaction.deferReply({ ephemeral: true });
+      // /rank is public when used by Staff; all other slash replies stay private.
+      const publicRank =
+        interaction.commandName === "rank" &&
+        isStaff(interaction.member);
+
+      await interaction.deferReply({
+        ephemeral: !publicRank
+      });
 
       if (interaction.commandName === "ping") {
         return replyToInteraction(interaction, {
@@ -2618,8 +2631,7 @@ client.on(Events.InteractionCreate, async interaction => {
               interaction.guild,
               member
             )
-          ],
-          ephemeral: false
+          ]
         });
       }
 
