@@ -117,6 +117,77 @@ const commands = [
         .setRequired(true)
     ),
 
+  new SlashCommandBuilder()
+    .setName("restraining-order")
+    .setDescription("יוצר צו הרחקה בין שני משתמשים")
+    .addUserOption(option =>
+      option
+        .setName("user1")
+        .setDescription("המשתמש הראשון")
+        .setRequired(true)
+    )
+    .addUserOption(option =>
+      option
+        .setName("user2")
+        .setDescription("המשתמש השני")
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option
+        .setName("duration")
+        .setDescription("בחר לכמה זמן הצו יהיה פעיל")
+        .setRequired(true)
+        .addChoices(
+          { name: "10 דקות", value: "10m" },
+          { name: "30 דקות", value: "30m" },
+          { name: "שעה", value: "1h" },
+          { name: "שעתיים", value: "2h" },
+          { name: "6 שעות", value: "6h" },
+          { name: "12 שעות", value: "12h" },
+          { name: "יום", value: "1d" },
+          { name: "3 ימים", value: "3d" },
+          { name: "7 ימים", value: "7d" },
+          { name: "14 ימים", value: "14d" },
+          { name: "30 ימים", value: "30d" },
+          { name: "90 ימים", value: "90d" },
+          { name: "180 ימים", value: "180d" },
+          { name: "שנה", value: "365d" },
+          { name: "לצמיתות", value: "permanent" }
+        )
+    )
+    .addStringOption(option =>
+      option
+        .setName("reason")
+        .setDescription("סיבה")
+        .setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("restraining-orders")
+    .setDescription("מציג צווי הרחקה פעילים")
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription("סנן לפי משתמש")
+        .setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("unrestraining-order")
+    .setDescription("מבטל צו הרחקה")
+    .addStringOption(option =>
+      option
+        .setName("id")
+        .setDescription("Order ID, לדוגמה RO0001")
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option
+        .setName("reason")
+        .setDescription("סיבת הביטול")
+        .setRequired(false)
+    ),
+
   userReasonCommand(
     "mute",
     "נותן Voice Mute זמני למשתמש",
