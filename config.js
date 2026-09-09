@@ -8,6 +8,10 @@ module.exports = {
   // רול צוות שמורשה להשתמש בפקודות מודרציה
   staffRoleId: "1508813254074564761",
 
+  // רול יחיד שמורשה להשתמש ב:
+  // /timeout /untimeout /kick /ban
+  punishmentRoleId: "1545733059947528313",
+
   // רול Chat Mute
   muteRoleId: "1508813281660370954",
 
