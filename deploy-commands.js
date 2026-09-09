@@ -79,6 +79,16 @@ const commands = [
     .setName("setup-xp-shop")
     .setDescription("שולח את פאנל ה־XP Shop של Zone X"),
 
+  new SlashCommandBuilder()
+    .setName("rank")
+    .setDescription("מציג את הסטטיסטיקות של משתמש ב-Zone X")
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription("המשתמש להצגת ה-Rank")
+        .setRequired(false)
+    ),
+
   userReasonCommand("warn", "נותן אזהרה למשתמש"),
 
   new SlashCommandBuilder()
