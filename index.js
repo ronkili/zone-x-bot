@@ -26,6 +26,10 @@ const DATA_DIR = path.join(__dirname, "data");
 const MOD_TIMERS_FILE = path.join(DATA_DIR, "mod-timers.json");
 const XP_FILE = path.join(DATA_DIR, "xp.json");
 const WARNINGS_FILE = path.join(DATA_DIR, "warns.json");
+const RESTRAINING_ORDERS_FILE = path.join(
+  DATA_DIR,
+  "restraining-orders.json"
+);
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -60,13 +64,23 @@ const warningsData = loadJson(WARNINGS_FILE, {
   guilds: {}
 });
 
+const restrainingOrdersData = loadJson(
+  RESTRAINING_ORDERS_FILE,
+  {
+    guilds: {}
+  }
+);
+
+const restrainingDisconnectLocks = new Set();
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildModeration
+    GatewayIntentBits.GuildModeration,
+    GatewayIntentBits.GuildVoiceStates
   ],
   partials: [Partials.Channel]
 });
@@ -385,6 +399,481 @@ async function applyWarnPunishment(
       reason:
         error.code || error.message || "Unknown error"
     };
+  }
+}
+
+
+// =====================
+// RESTRAINING ORDERS
+// =====================
+
+function saveRestrainingOrdersData() {
+  saveJson(
+    RESTRAINING_ORDERS_FILE,
+    restrainingOrdersData
+  );
+}
+
+function getGuildRestrainingOrders(guildId) {
+  if (!restrainingOrdersData.guilds[guildId]) {
+    restrainingOrdersData.guilds[guildId] = {
+      nextId: 1,
+      orders: []
+    };
+  }
+
+  const guildData =
+    restrainingOrdersData.guilds[guildId];
+
+  if (!Array.isArray(guildData.orders)) {
+    guildData.orders = [];
+  }
+
+  if (
+    !Number.isInteger(
+      Number(guildData.nextId)
+    ) ||
+    Number(guildData.nextId) < 1
+  ) {
+    guildData.nextId = 1;
+  }
+
+  return guildData;
+}
+
+function isRestrainingOrderActive(order) {
+  return Boolean(
+    order &&
+    (
+      order.expiresAt === null ||
+      Number(order.expiresAt) > Date.now()
+    )
+  );
+}
+
+function sameRestrainingPair(
+  order,
+  user1Id,
+  user2Id
+) {
+  return Boolean(
+    order &&
+    (
+      (
+        order.user1Id === user1Id &&
+        order.user2Id === user2Id
+      ) ||
+      (
+        order.user1Id === user2Id &&
+        order.user2Id === user1Id
+      )
+    )
+  );
+}
+
+function findActiveRestrainingOrder(
+  guildId,
+  user1Id,
+  user2Id
+) {
+  const guildData =
+    getGuildRestrainingOrders(guildId);
+
+  return guildData.orders.find(
+    order =>
+      isRestrainingOrderActive(order) &&
+      sameRestrainingPair(
+        order,
+        user1Id,
+        user2Id
+      )
+  ) || null;
+}
+
+function createRestrainingOrder({
+  guildId,
+  user1Id,
+  user2Id,
+  moderatorId,
+  reason,
+  expiresAt
+}) {
+  const guildData =
+    getGuildRestrainingOrders(guildId);
+
+  const number =
+    Number(guildData.nextId) || 1;
+
+  const id =
+    `RO${String(number).padStart(4, "0")}`;
+
+  guildData.nextId = number + 1;
+
+  const order = {
+    id,
+    guildId,
+    user1Id,
+    user2Id,
+    moderatorId,
+    reason,
+    createdAt: Date.now(),
+    expiresAt
+  };
+
+  guildData.orders.push(order);
+  saveRestrainingOrdersData();
+
+  return order;
+}
+
+function removeRestrainingOrder(
+  guildId,
+  orderId
+) {
+  const guildData =
+    getGuildRestrainingOrders(guildId);
+
+  const normalizedId =
+    String(orderId || "")
+      .trim()
+      .toUpperCase();
+
+  const index =
+    guildData.orders.findIndex(
+      order =>
+        String(order.id)
+          .toUpperCase() === normalizedId
+    );
+
+  if (index === -1) {
+    return null;
+  }
+
+  const [removed] =
+    guildData.orders.splice(index, 1);
+
+  saveRestrainingOrdersData();
+  return removed;
+}
+
+function restrainingOrderDurationText(order) {
+  if (order.expiresAt === null) {
+    return "לצמיתות";
+  }
+
+  const remaining =
+    Number(order.expiresAt) - Date.now();
+
+  if (remaining <= 0) {
+    return "הסתיים";
+  }
+
+  const timestamp =
+    Math.floor(
+      Number(order.expiresAt) / 1000
+    );
+
+  return (
+    `${formatDuration(remaining)} ` +
+    `(<t:${timestamp}:R>)`
+  );
+}
+
+function activeRestrainingOrdersForUser(
+  guildId,
+  userId
+) {
+  const guildData =
+    getGuildRestrainingOrders(guildId);
+
+  return guildData.orders.filter(
+    order =>
+      isRestrainingOrderActive(order) &&
+      (
+        order.user1Id === userId ||
+        order.user2Id === userId
+      )
+  );
+}
+
+async function checkRestrainingOrders() {
+  const now = Date.now();
+  let changed = false;
+  const expired = [];
+
+  for (
+    const [
+      guildId,
+      guildData
+    ] of Object.entries(
+      restrainingOrdersData.guilds
+    )
+  ) {
+    if (!Array.isArray(guildData.orders)) {
+      guildData.orders = [];
+      changed = true;
+      continue;
+    }
+
+    const keep = [];
+
+    for (const order of guildData.orders) {
+      if (
+        order.expiresAt !== null &&
+        Number(order.expiresAt) <= now
+      ) {
+        expired.push({
+          guildId,
+          order
+        });
+        changed = true;
+      } else {
+        keep.push(order);
+      }
+    }
+
+    guildData.orders = keep;
+  }
+
+  if (changed) {
+    saveRestrainingOrdersData();
+  }
+
+  for (const item of expired) {
+    const guild =
+      client.guilds.cache.get(
+        item.guildId
+      );
+
+    if (!guild) continue;
+
+    await sendModLog(
+      guild,
+      buildModEmbed(
+        "✅ Restraining Order הסתיים",
+        "Green",
+        [
+          {
+            name: "Order ID",
+            value: item.order.id
+          },
+          {
+            name: "בין",
+            value:
+              `<@${item.order.user1Id}> ↔ ` +
+              `<@${item.order.user2Id}>`
+          },
+          {
+            name: "סיבה מקורית",
+            value:
+              item.order.reason ||
+              "לא צוינה סיבה"
+          }
+        ]
+      )
+    );
+  }
+}
+
+async function enforceRestrainingOrder(
+  guild,
+  order
+) {
+  if (
+    !guild ||
+    !isRestrainingOrderActive(order)
+  ) {
+    return {
+      triggered: false,
+      disconnected: []
+    };
+  }
+
+  const member1 =
+    await guild.members
+      .fetch(order.user1Id)
+      .catch(() => null);
+
+  const member2 =
+    await guild.members
+      .fetch(order.user2Id)
+      .catch(() => null);
+
+  if (!member1 || !member2) {
+    return {
+      triggered: false,
+      disconnected: []
+    };
+  }
+
+  const channelId1 =
+    member1.voice.channelId;
+
+  const channelId2 =
+    member2.voice.channelId;
+
+  if (
+    !channelId1 ||
+    !channelId2 ||
+    channelId1 !== channelId2
+  ) {
+    return {
+      triggered: false,
+      disconnected: []
+    };
+  }
+
+  const lockKey =
+    `${guild.id}:${order.id}:${channelId1}`;
+
+  if (
+    restrainingDisconnectLocks.has(
+      lockKey
+    )
+  ) {
+    return {
+      triggered: false,
+      disconnected: []
+    };
+  }
+
+  restrainingDisconnectLocks.add(lockKey);
+
+  try {
+    const botMember =
+      await guild.members
+        .fetchMe()
+        .catch(() => null);
+
+    if (
+      !botMember ||
+      !botMember.permissions.has(
+        PermissionFlagsBits.MoveMembers
+      )
+    ) {
+      console.error(
+        "❌ Restraining Order requires Move Members."
+      );
+
+      return {
+        triggered: true,
+        disconnected: [],
+        permissionMissing: true
+      };
+    }
+
+    const results =
+      await Promise.allSettled([
+        member1.voice.disconnect(
+          `Restraining Order ${order.id}`
+        ),
+        member2.voice.disconnect(
+          `Restraining Order ${order.id}`
+        )
+      ]);
+
+    const disconnected = [];
+
+    if (results[0].status === "fulfilled") {
+      disconnected.push(member1.id);
+    }
+
+    if (results[1].status === "fulfilled") {
+      disconnected.push(member2.id);
+    }
+
+    await sendModLog(
+      guild,
+      buildModEmbed(
+        "🚫 Restraining Order הופעל",
+        "Red",
+        [
+          {
+            name: "Order ID",
+            value: order.id
+          },
+          {
+            name: "בין",
+            value:
+              `${member1} ↔ ${member2}`
+          },
+          {
+            name: "Voice Channel",
+            value: `<#${channelId1}>`
+          },
+          {
+            name: "תוצאה",
+            value:
+              disconnected.length === 2
+                ? "שני המשתמשים נותקו."
+                : (
+                    disconnected.length === 1
+                      ? "רק משתמש אחד נותק."
+                      : "לא הצלחתי לנתק את המשתמשים."
+                  )
+          }
+        ]
+      )
+    );
+
+    return {
+      triggered: true,
+      disconnected
+    };
+  } finally {
+    setTimeout(() => {
+      restrainingDisconnectLocks.delete(
+        lockKey
+      );
+    }, 1500);
+  }
+}
+
+async function enforceRestrainingOrdersForUser(
+  guild,
+  userId
+) {
+  const orders =
+    activeRestrainingOrdersForUser(
+      guild.id,
+      userId
+    );
+
+  for (const order of orders) {
+    await enforceRestrainingOrder(
+      guild,
+      order
+    );
+  }
+}
+
+async function enforceAllRestrainingOrders() {
+  for (
+    const [
+      guildId,
+      guildData
+    ] of Object.entries(
+      restrainingOrdersData.guilds
+    )
+  ) {
+    const guild =
+      client.guilds.cache.get(guildId);
+
+    if (!guild) continue;
+
+    for (
+      const order of
+      (guildData.orders || [])
+    ) {
+      if (
+        isRestrainingOrderActive(order)
+      ) {
+        await enforceRestrainingOrder(
+          guild,
+          order
+        );
+      }
+    }
   }
 }
 
@@ -1680,10 +2169,19 @@ client.once(Events.ClientReady, async readyClient => {
   console.log("🎮 Zone X XP + Shop loaded");
 
   await checkModTimers();
+  await checkRestrainingOrders();
+  await enforceAllRestrainingOrders();
 
   setInterval(() => {
     checkModTimers().catch(error => {
       console.error("❌ Mod timer interval error:", error);
+    });
+
+    checkRestrainingOrders().catch(error => {
+      console.error(
+        "❌ Restraining Order interval error:",
+        error
+      );
     });
   }, 10 * 1000);
 });
@@ -1706,6 +2204,34 @@ async function replyToInteraction(interaction, payload) {
 
   return interaction.reply(data);
 }
+
+client.on(
+  Events.VoiceStateUpdate,
+  async (oldState, newState) => {
+    try {
+      if (
+        oldState.channelId ===
+        newState.channelId
+      ) {
+        return;
+      }
+
+      if (!newState.channelId) {
+        return;
+      }
+
+      await enforceRestrainingOrdersForUser(
+        newState.guild,
+        newState.id
+      );
+    } catch (error) {
+      console.error(
+        "❌ Restraining Order voice check error:",
+        error
+      );
+    }
+  }
+);
 
 client.on(Events.InteractionCreate, async interaction => {
   try {
@@ -1897,6 +2423,9 @@ client.on(Events.InteractionCreate, async interaction => {
         "warnings",
         "unwarn",
         "clear-warns",
+        "restraining-order",
+        "restraining-orders",
+        "unrestraining-order",
         "mute",
         "unvoice-mute",
         "chat-mute",
@@ -2260,6 +2789,368 @@ client.on(Events.InteractionCreate, async interaction => {
               : `ℹ️ ל־${user} לא היו Warns פעילים.`,
           ephemeral: true
         });
+      }
+
+      if (
+        interaction.commandName ===
+        "restraining-order"
+      ) {
+        const user1 =
+          interaction.options.getUser(
+            "user1"
+          );
+
+        const user2 =
+          interaction.options.getUser(
+            "user2"
+          );
+
+        const durationValue =
+          interaction.options.getString(
+            "duration"
+          );
+
+        const reason =
+          interaction.options.getString(
+            "reason"
+          ) || "לא צוינה סיבה";
+
+        if (user1.id === user2.id) {
+          return replyToInteraction(
+            interaction,
+            {
+              content:
+                "❌ צריך לבחור שני משתמשים שונים.",
+              ephemeral: true
+            }
+          );
+        }
+
+        if (user1.bot || user2.bot) {
+          return replyToInteraction(
+            interaction,
+            {
+              content:
+                "❌ אי אפשר ליצור צו הרחקה מול בוט.",
+              ephemeral: true
+            }
+          );
+        }
+
+        const member1 =
+          await getGuildMember(
+            interaction,
+            user1
+          );
+
+        const member2 =
+          await getGuildMember(
+            interaction,
+            user2
+          );
+
+        if (!member1 || !member2) {
+          return replyToInteraction(
+            interaction,
+            {
+              content:
+                "❌ שני המשתמשים חייבים להיות בשרת.",
+              ephemeral: true
+            }
+          );
+        }
+
+        const botMember =
+          await interaction.guild.members
+            .fetchMe()
+            .catch(() => null);
+
+        if (
+          !botMember ||
+          !botMember.permissions.has(
+            PermissionFlagsBits.MoveMembers
+          )
+        ) {
+          return replyToInteraction(
+            interaction,
+            {
+              content:
+                "❌ כדי לאכוף צו הרחקה לבוט צריך `Move Members`.",
+              ephemeral: true
+            }
+          );
+        }
+
+        const existing =
+          findActiveRestrainingOrder(
+            interaction.guild.id,
+            user1.id,
+            user2.id
+          );
+
+        if (existing) {
+          return replyToInteraction(
+            interaction,
+            {
+              content:
+                `❌ כבר קיים צו הרחקה פעיל ביניהם: **${existing.id}**.\n` +
+                `⏳ זמן: **${restrainingOrderDurationText(existing)}**`,
+              ephemeral: true
+            }
+          );
+        }
+
+        const permanent =
+          durationValue === "permanent";
+
+        const duration =
+          permanent
+            ? null
+            : parseDuration(
+                durationValue,
+                3650
+              );
+
+        if (!permanent && !duration) {
+          return replyToInteraction(
+            interaction,
+            {
+              content:
+                "❌ זמן צו ההרחקה לא תקין.",
+              ephemeral: true
+            }
+          );
+        }
+
+        const order =
+          createRestrainingOrder({
+            guildId:
+              interaction.guild.id,
+            user1Id: user1.id,
+            user2Id: user2.id,
+            moderatorId:
+              interaction.user.id,
+            reason,
+            expiresAt:
+              permanent
+                ? null
+                : Date.now() + duration
+          });
+
+        const enforcement =
+          await enforceRestrainingOrder(
+            interaction.guild,
+            order
+          );
+
+        await sendModLog(
+          interaction.guild,
+          buildModEmbed(
+            "🚫 Restraining Order נוצר",
+            "DarkRed",
+            [
+              {
+                name: "Order ID",
+                value: order.id
+              },
+              {
+                name: "בין",
+                value:
+                  `${user1} ↔ ${user2}`
+              },
+              {
+                name: "זמן",
+                value:
+                  permanent
+                    ? "לצמיתות"
+                    : formatDuration(
+                        duration
+                      )
+              },
+              {
+                name: "צוות",
+                value:
+                  `${interaction.user}`
+              },
+              {
+                name: "סיבה",
+                value: reason
+              }
+            ]
+          )
+        );
+
+        return replyToInteraction(
+          interaction,
+          {
+            content:
+              `✅ נוצר צו הרחקה **${order.id}** בין ${user1} ל־${user2}.\n` +
+              `⏳ זמן: **${permanent ? "לצמיתות" : formatDuration(duration)}**.\n` +
+              "🎙️ כל עוד הצו פעיל, אם שניהם יהיו באותו Voice Channel הבוט ינתק את שניהם." +
+              (
+                enforcement.triggered
+                  ? "\n🚫 הצו נאכף מיד כי הם כבר היו באותה שיחה."
+                  : ""
+              ),
+            ephemeral: true
+          }
+        );
+      }
+
+      if (
+        interaction.commandName ===
+        "restraining-orders"
+      ) {
+        const selectedUser =
+          interaction.options.getUser(
+            "user"
+          );
+
+        const guildData =
+          getGuildRestrainingOrders(
+            interaction.guild.id
+          );
+
+        const orders =
+          guildData.orders.filter(
+            order =>
+              isRestrainingOrderActive(
+                order
+              ) &&
+              (
+                !selectedUser ||
+                order.user1Id ===
+                  selectedUser.id ||
+                order.user2Id ===
+                  selectedUser.id
+              )
+          );
+
+        if (!orders.length) {
+          return replyToInteraction(
+            interaction,
+            {
+              content:
+                selectedUser
+                  ? `ℹ️ אין צווי הרחקה פעילים שקשורים ל־${selectedUser}.`
+                  : "ℹ️ אין כרגע צווי הרחקה פעילים.",
+              ephemeral: true
+            }
+          );
+        }
+
+        const visible =
+          orders.slice(0, 15);
+
+        const description =
+          visible.map(order => {
+            return (
+              `**${order.id}** — ` +
+              `<@${order.user1Id}> ↔ ` +
+              `<@${order.user2Id}>\n` +
+              `⏳ ${restrainingOrderDurationText(order)}\n` +
+              `📝 ${String(
+                order.reason ||
+                "לא צוינה סיבה"
+              ).slice(0, 120)}`
+            );
+          }).join("\n\n");
+
+        const embed =
+          new EmbedBuilder()
+            .setColor("DarkRed")
+            .setTitle(
+              "🚫 Active Restraining Orders"
+            )
+            .setDescription(
+              description +
+              (
+                orders.length >
+                visible.length
+                  ? `\n\nמוצגים ${visible.length} מתוך ${orders.length} צווים.`
+                  : ""
+              )
+            )
+            .setTimestamp();
+
+        return replyToInteraction(
+          interaction,
+          {
+            embeds: [embed],
+            ephemeral: true
+          }
+        );
+      }
+
+      if (
+        interaction.commandName ===
+        "unrestraining-order"
+      ) {
+        const orderId =
+          interaction.options.getString(
+            "id"
+          );
+
+        const reason =
+          interaction.options.getString(
+            "reason"
+          ) || "הוסר ידנית";
+
+        const removed =
+          removeRestrainingOrder(
+            interaction.guild.id,
+            orderId
+          );
+
+        if (!removed) {
+          return replyToInteraction(
+            interaction,
+            {
+              content:
+                `❌ לא מצאתי צו הרחקה עם ID **${String(orderId).toUpperCase()}**.`,
+              ephemeral: true
+            }
+          );
+        }
+
+        await sendModLog(
+          interaction.guild,
+          buildModEmbed(
+            "✅ Restraining Order בוטל",
+            "Green",
+            [
+              {
+                name: "Order ID",
+                value: removed.id
+              },
+              {
+                name: "בין",
+                value:
+                  `<@${removed.user1Id}> ↔ ` +
+                  `<@${removed.user2Id}>`
+              },
+              {
+                name: "צוות",
+                value:
+                  `${interaction.user}`
+              },
+              {
+                name: "סיבת ביטול",
+                value: reason
+              }
+            ]
+          )
+        );
+
+        return replyToInteraction(
+          interaction,
+          {
+            content:
+              `✅ צו ההרחקה **${removed.id}** בוטל.\n` +
+              `<@${removed.user1Id}> ו־<@${removed.user2Id}> יכולים שוב להיות באותה שיחה.`,
+            ephemeral: true
+          }
+        );
       }
 
       if (interaction.commandName === "mute") {
