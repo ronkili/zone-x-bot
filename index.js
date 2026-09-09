@@ -92,6 +92,15 @@ function isStaff(member) {
   );
 }
 
+function hasPunishmentAccess(member) {
+  return Boolean(
+    config.punishmentRoleId &&
+    member?.roles?.cache?.has(
+      config.punishmentRoleId
+    )
+  );
+}
+
 function parseDuration(input, maxDays = 30) {
   const match = String(input || "")
     .trim()
@@ -902,6 +911,121 @@ function saveXpData() {
 
 function formatXp(amount) {
   return Number(amount || 0).toLocaleString("en-US");
+}
+
+function getXpPosition(userId, field = "xp") {
+  const sorted = Object.entries(
+    xpData.users || {}
+  )
+    .map(([id, profile]) => ({
+      id,
+      value: Number(profile?.[field] || 0)
+    }))
+    .sort((a, b) => b.value - a.value);
+
+  const position =
+    sorted.findIndex(
+      item => item.id === userId
+    );
+
+  return position === -1
+    ? sorted.length + 1
+    : position + 1;
+}
+
+function getRankLevelInfo(xp) {
+  const safeXp =
+    Math.max(0, Number(xp || 0));
+
+  const xpPerLevel = 500;
+  const level =
+    Math.floor(safeXp / xpPerLevel) + 1;
+
+  const xpIntoLevel =
+    safeXp % xpPerLevel;
+
+  const progress =
+    Math.floor(
+      (xpIntoLevel / xpPerLevel) * 100
+    );
+
+  const xpToNext =
+    xpPerLevel - xpIntoLevel;
+
+  return {
+    level,
+    progress,
+    xpToNext,
+    xpPerLevel
+  };
+}
+
+function buildRankEmbed(
+  guild,
+  member
+) {
+  const profile =
+    getXpProfile(member.id);
+
+  const xp =
+    Number(profile.xp || 0);
+
+  const messages =
+    Number(profile.messages || 0);
+
+  const xpPosition =
+    getXpPosition(member.id, "xp");
+
+  const messagePosition =
+    getXpPosition(member.id, "messages");
+
+  const levelInfo =
+    getRankLevelInfo(xp);
+
+  const warnCount =
+    getUserWarnings(
+      guild.id,
+      member.id
+    ).warns.length;
+
+  const restrainingCount =
+    activeRestrainingOrdersForUser(
+      guild.id,
+      member.id
+    ).length;
+
+  const roleCount =
+    member.roles.cache.filter(
+      role => role.id !== guild.id
+    ).size;
+
+  return new EmbedBuilder()
+    .setColor("Aqua")
+    .setTitle("All stats in Zone X")
+    .setThumbnail(
+      member.user.displayAvatarURL({
+        size: 256
+      })
+    )
+    .setDescription(
+      [
+        `**#${xpPosition} ${member.displayName}**  💎 **${levelInfo.level}**`,
+        "",
+        `**Total XP:** ${formatXp(xp)} (#${xpPosition})`,
+        `**Next Level:** ${levelInfo.progress}%`,
+        `**XP needed:** ${formatXp(levelInfo.xpToNext)}`,
+        "",
+        "**Stats**",
+        `💬 ${formatXp(messages)} (#${messagePosition})`,
+        `⚠️ ${warnCount} Warns`,
+        `🚫 ${restrainingCount} Active Orders`,
+        `🎭 ${roleCount} Roles`
+      ].join("\\n")
+    )
+    .setFooter({
+      text: `Zone X • Rank • ${member.user.username}`
+    })
+    .setTimestamp();
 }
 
 function getShopItems() {
@@ -2419,6 +2543,7 @@ client.on(Events.InteractionCreate, async interaction => {
       }
 
       const moderationCommands = [
+        "rank",
         "warn",
         "warnings",
         "unwarn",
@@ -2444,6 +2569,58 @@ client.on(Events.InteractionCreate, async interaction => {
             ephemeral: true
           });
         }
+      }
+
+      const punishmentOnlyCommands = [
+        "timeout",
+        "untimeout",
+        "kick",
+        "ban"
+      ];
+
+      if (
+        punishmentOnlyCommands.includes(
+          interaction.commandName
+        ) &&
+        !hasPunishmentAccess(
+          interaction.member
+        )
+      ) {
+        return replyToInteraction(interaction, {
+          content:
+            "❌ רק הרול המוגדר ב־`punishmentRoleId` יכול להשתמש בפקודה הזאת.",
+          ephemeral: true
+        });
+      }
+
+      if (interaction.commandName === "rank") {
+        const user =
+          interaction.options.getUser("user") ||
+          interaction.user;
+
+        const member =
+          await getGuildMember(
+            interaction,
+            user
+          );
+
+        if (!member) {
+          return replyToInteraction(interaction, {
+            content:
+              "❌ המשתמש לא נמצא בשרת.",
+            ephemeral: true
+          });
+        }
+
+        return replyToInteraction(interaction, {
+          embeds: [
+            buildRankEmbed(
+              interaction.guild,
+              member
+            )
+          ],
+          ephemeral: false
+        });
       }
 
       if (interaction.commandName === "warn") {
