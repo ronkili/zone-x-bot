@@ -26,6 +26,10 @@ const DATA_DIR = path.join(__dirname, "data");
 const MOD_TIMERS_FILE = path.join(DATA_DIR, "mod-timers.json");
 const XP_FILE = path.join(DATA_DIR, "xp.json");
 const WARNINGS_FILE = path.join(DATA_DIR, "warns.json");
+const VOICE_TIME_FILE = path.join(
+  DATA_DIR,
+  "voice-time.json"
+);
 const RESTRAINING_ORDERS_FILE = path.join(
   DATA_DIR,
   "restraining-orders.json"
@@ -63,6 +67,15 @@ const xpData = loadJson(XP_FILE, {
 const warningsData = loadJson(WARNINGS_FILE, {
   guilds: {}
 });
+
+const voiceTimeData = loadJson(
+  VOICE_TIME_FILE,
+  {
+    guilds: {}
+  }
+);
+
+const activeVoiceSessions = new Map();
 
 const restrainingOrdersData = loadJson(
   RESTRAINING_ORDERS_FILE,
@@ -408,6 +421,405 @@ async function applyWarnPunishment(
       reason:
         error.code || error.message || "Unknown error"
     };
+  }
+}
+
+
+// =====================
+// WEEKLY VOICE TIME
+// =====================
+
+function saveVoiceTimeData() {
+  saveJson(
+    VOICE_TIME_FILE,
+    voiceTimeData
+  );
+}
+
+function getCurrentWeekStartMs(
+  now = Date.now()
+) {
+  const date = new Date(now);
+
+  const day = date.getUTCDay();
+
+  const daysFromMonday =
+    day === 0
+      ? 6
+      : day - 1;
+
+  date.setUTCDate(
+    date.getUTCDate() -
+    daysFromMonday
+  );
+
+  date.setUTCHours(0, 0, 0, 0);
+
+  return date.getTime();
+}
+
+function ensureVoiceWeek(
+  guildId,
+  now = Date.now()
+) {
+  const weekStart =
+    getCurrentWeekStartMs(now);
+
+  const current =
+    voiceTimeData.guilds[guildId];
+
+  if (
+    !current ||
+    Number(current.weekStart) !==
+      weekStart
+  ) {
+    voiceTimeData.guilds[guildId] = {
+      weekStart,
+      users: {}
+    };
+
+    for (
+      const session of
+      activeVoiceSessions.values()
+    ) {
+      if (
+        session.guildId === guildId
+      ) {
+        session.startedAt =
+          Math.max(
+            Number(session.startedAt) ||
+              weekStart,
+            weekStart
+          );
+      }
+    }
+
+    saveVoiceTimeData();
+  }
+
+  const guildData =
+    voiceTimeData.guilds[guildId];
+
+  if (
+    !guildData.users ||
+    typeof guildData.users !== "object"
+  ) {
+    guildData.users = {};
+  }
+
+  return guildData;
+}
+
+function getVoiceTimeProfile(
+  guildId,
+  userId
+) {
+  const guildData =
+    ensureVoiceWeek(guildId);
+
+  if (!guildData.users[userId]) {
+    guildData.users[userId] = {
+      milliseconds: 0
+    };
+  }
+
+  const profile =
+    guildData.users[userId];
+
+  profile.milliseconds =
+    Math.max(
+      0,
+      Number(
+        profile.milliseconds || 0
+      )
+    );
+
+  return profile;
+}
+
+function voiceSessionKey(
+  guildId,
+  userId
+) {
+  return `${guildId}:${userId}`;
+}
+
+function startVoiceSession(
+  guildId,
+  userId,
+  startedAt = Date.now()
+) {
+  const guildData =
+    ensureVoiceWeek(
+      guildId,
+      startedAt
+    );
+
+  const key =
+    voiceSessionKey(
+      guildId,
+      userId
+    );
+
+  if (
+    activeVoiceSessions.has(key)
+  ) {
+    return;
+  }
+
+  activeVoiceSessions.set(
+    key,
+    {
+      guildId,
+      userId,
+      startedAt:
+        Math.max(
+          startedAt,
+          guildData.weekStart
+        )
+    }
+  );
+}
+
+function endVoiceSession(
+  guildId,
+  userId,
+  endedAt = Date.now()
+) {
+  const key =
+    voiceSessionKey(
+      guildId,
+      userId
+    );
+
+  const session =
+    activeVoiceSessions.get(key);
+
+  if (!session) {
+    return;
+  }
+
+  const guildData =
+    ensureVoiceWeek(
+      guildId,
+      endedAt
+    );
+
+  const profile =
+    getVoiceTimeProfile(
+      guildId,
+      userId
+    );
+
+  const startedAt =
+    Math.max(
+      Number(session.startedAt) ||
+        endedAt,
+      guildData.weekStart
+    );
+
+  const elapsed =
+    Math.max(
+      0,
+      endedAt - startedAt
+    );
+
+  profile.milliseconds += elapsed;
+
+  activeVoiceSessions.delete(key);
+  saveVoiceTimeData();
+}
+
+function flushActiveVoiceSessions() {
+  const now = Date.now();
+  let changed = false;
+
+  for (
+    const [
+      key,
+      session
+    ] of activeVoiceSessions
+  ) {
+    const guildData =
+      ensureVoiceWeek(
+        session.guildId,
+        now
+      );
+
+    const profile =
+      getVoiceTimeProfile(
+        session.guildId,
+        session.userId
+      );
+
+    const startedAt =
+      Math.max(
+        Number(session.startedAt) ||
+          now,
+        guildData.weekStart
+      );
+
+    const elapsed =
+      Math.max(
+        0,
+        now - startedAt
+      );
+
+    if (elapsed > 0) {
+      profile.milliseconds +=
+        elapsed;
+
+      session.startedAt = now;
+
+      activeVoiceSessions.set(
+        key,
+        session
+      );
+
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    saveVoiceTimeData();
+  }
+}
+
+function getWeeklyVoiceTimeMs(
+  guildId,
+  userId
+) {
+  const now = Date.now();
+
+  const guildData =
+    ensureVoiceWeek(
+      guildId,
+      now
+    );
+
+  const profile =
+    getVoiceTimeProfile(
+      guildId,
+      userId
+    );
+
+  let total =
+    Number(
+      profile.milliseconds || 0
+    );
+
+  const session =
+    activeVoiceSessions.get(
+      voiceSessionKey(
+        guildId,
+        userId
+      )
+    );
+
+  if (session) {
+    total += Math.max(
+      0,
+      now -
+        Math.max(
+          Number(session.startedAt) ||
+            now,
+          guildData.weekStart
+        )
+    );
+  }
+
+  return total;
+}
+
+function formatWeeklyVoiceTime(ms) {
+  const totalMinutes =
+    Math.floor(
+      Math.max(0, Number(ms || 0)) /
+      60000
+    );
+
+  const hours =
+    Math.floor(
+      totalMinutes / 60
+    );
+
+  const minutes =
+    totalMinutes % 60;
+
+  if (hours <= 0) {
+    return `${minutes}m`;
+  }
+
+  return `${hours}h ${minutes}m`;
+}
+
+function handleVoiceTimeStateChange(
+  oldState,
+  newState
+) {
+  const member =
+    newState.member ||
+    oldState.member;
+
+  if (
+    !member ||
+    member.user?.bot
+  ) {
+    return;
+  }
+
+  const oldChannelId =
+    oldState.channelId;
+
+  const newChannelId =
+    newState.channelId;
+
+  if (
+    !oldChannelId &&
+    newChannelId
+  ) {
+    startVoiceSession(
+      newState.guild.id,
+      newState.id
+    );
+
+    return;
+  }
+
+  if (
+    oldChannelId &&
+    !newChannelId
+  ) {
+    endVoiceSession(
+      oldState.guild.id,
+      oldState.id
+    );
+  }
+}
+
+function initializeActiveVoiceSessions() {
+  for (
+    const guild of
+    client.guilds.cache.values()
+  ) {
+    ensureVoiceWeek(guild.id);
+
+    for (
+      const voiceState of
+      guild.voiceStates.cache.values()
+    ) {
+      if (
+        !voiceState.channelId ||
+        voiceState.member?.user?.bot
+      ) {
+        continue;
+      }
+
+      startVoiceSession(
+        guild.id,
+        voiceState.id
+      );
+    }
   }
 }
 
@@ -999,6 +1411,14 @@ function buildRankEmbed(
       role => role.id !== guild.id
     ).size;
 
+  const weeklyVoiceTime =
+    formatWeeklyVoiceTime(
+      getWeeklyVoiceTimeMs(
+        guild.id,
+        member.id
+      )
+    );
+
   const topText = [
     `**#${xpPosition} ${member.displayName}** 💎 **${levelInfo.level}**`,
     "",
@@ -1009,6 +1429,7 @@ function buildRankEmbed(
 
   const statsText = [
     `💬 **${formatXp(messages)}** (#${messagePosition})`,
+    `🎙️ **${weeklyVoiceTime}** Voice This Week`,
     `⚠️ **${warnCount}** Warns`,
     `🚫 **${restrainingCount}** Active Orders`,
     `🎭 **${roleCount}** Roles`
@@ -2303,6 +2724,8 @@ client.once(Events.ClientReady, async readyClient => {
   await checkRestrainingOrders();
   await enforceAllRestrainingOrders();
 
+  initializeActiveVoiceSessions();
+
   setInterval(() => {
     checkModTimers().catch(error => {
       console.error("❌ Mod timer interval error:", error);
@@ -2315,6 +2738,17 @@ client.once(Events.ClientReady, async readyClient => {
       );
     });
   }, 10 * 1000);
+
+  setInterval(() => {
+    try {
+      flushActiveVoiceSessions();
+    } catch (error) {
+      console.error(
+        "❌ Voice time save interval error:",
+        error
+      );
+    }
+  }, 60 * 1000);
 });
 
 async function replyToInteraction(interaction, payload) {
@@ -2340,6 +2774,11 @@ client.on(
   Events.VoiceStateUpdate,
   async (oldState, newState) => {
     try {
+      handleVoiceTimeStateChange(
+        oldState,
+        newState
+      );
+
       if (
         oldState.channelId ===
         newState.channelId
@@ -2357,7 +2796,7 @@ client.on(
       );
     } catch (error) {
       console.error(
-        "❌ Restraining Order voice check error:",
+        "❌ Voice state handler error:",
         error
       );
     }
