@@ -271,7 +271,9 @@ function createWarning({
   guildId,
   userId,
   moderatorId,
-  reason
+  reason,
+  action = "none",
+  durationMs = null
 }) {
   const guildData = getGuildWarnings(guildId);
   const userData = getUserWarnings(guildId, userId);
@@ -286,6 +288,11 @@ function createWarning({
     userId,
     moderatorId,
     reason,
+    action,
+    durationMs:
+      durationMs === null
+        ? null
+        : Number(durationMs),
     createdAt: Date.now()
   };
 
@@ -334,6 +341,417 @@ function clearUserWarnings(guildId, userId) {
   return removedCount;
 }
 
+function getWarnActionLabel(action) {
+  const labels = {
+    none: "Warn בלבד",
+    "voice-mute": "Voice Mute",
+    "chat-mute": "Chat Mute",
+    timeout: "Timeout",
+    ban: "Ban",
+    "auto-link": "Anti-Link"
+  };
+
+  return labels[action] || "Warn בלבד";
+}
+
+function getWarnActionDetails(
+  action,
+  durationMs = null
+) {
+  const label =
+    getWarnActionLabel(action);
+
+  if (
+    [
+      "voice-mute",
+      "chat-mute",
+      "timeout"
+    ].includes(action) &&
+    durationMs
+  ) {
+    return (
+      `${label} ל־${formatDuration(durationMs)}`
+    );
+  }
+
+  return label;
+}
+
+async function validateSelectedWarnAction({
+  interaction,
+  member,
+  action,
+  duration
+}) {
+  if (
+    [
+      "voice-mute",
+      "chat-mute",
+      "timeout"
+    ].includes(action) &&
+    !duration
+  ) {
+    return {
+      ok: false,
+      message:
+        "❌ בפעולה שבחרת חייבים לבחור גם `duration`."
+    };
+  }
+
+  if (
+    ["timeout", "ban"].includes(action) &&
+    !hasPunishmentAccess(
+      interaction.member
+    )
+  ) {
+    return {
+      ok: false,
+      message:
+        "❌ בשביל Warn עם Timeout או Ban צריך את הרול שמוגדר ב־`punishmentRoleId`."
+    };
+  }
+
+  if (action === "voice-mute") {
+    if (!member.voice.channelId) {
+      return {
+        ok: false,
+        message:
+          "❌ אי אפשר לתת Voice Mute דרך ה־Warn כי המשתמש לא נמצא כרגע ב־Voice."
+      };
+    }
+
+    const botMember =
+      await interaction.guild.members
+        .fetchMe()
+        .catch(() => null);
+
+    if (
+      !botMember ||
+      !botMember.permissions.has(
+        PermissionFlagsBits.MuteMembers
+      )
+    ) {
+      return {
+        ok: false,
+        message:
+          "❌ לבוט אין `Mute Members`."
+      };
+    }
+  }
+
+  if (action === "chat-mute") {
+    if (!config.muteRoleId) {
+      return {
+        ok: false,
+        message:
+          "❌ חסר `muteRoleId` ב־config.js."
+      };
+    }
+
+    const muteRole =
+      await interaction.guild.roles
+        .fetch(config.muteRoleId)
+        .catch(() => null);
+
+    if (!muteRole) {
+      return {
+        ok: false,
+        message:
+          "❌ לא מצאתי את רול ה־Chat Mute."
+      };
+    }
+
+    const botMember =
+      await interaction.guild.members
+        .fetchMe()
+        .catch(() => null);
+
+    if (
+      !botMember ||
+      !botMember.permissions.has(
+        PermissionFlagsBits.ManageRoles
+      )
+    ) {
+      return {
+        ok: false,
+        message:
+          "❌ לבוט אין `Manage Roles`."
+      };
+    }
+
+    if (
+      muteRole.managed ||
+      muteRole.position >=
+        botMember.roles.highest.position
+    ) {
+      return {
+        ok: false,
+        message:
+          "❌ הבוט לא יכול לנהל את רול ה־Chat Mute. שים את רול הבוט מעליו."
+      };
+    }
+  }
+
+  if (
+    action === "timeout" &&
+    !member.moderatable
+  ) {
+    return {
+      ok: false,
+      message:
+        "❌ אי אפשר לתת Timeout למשתמש הזה."
+    };
+  }
+
+  if (
+    action === "ban" &&
+    !member.bannable
+  ) {
+    return {
+      ok: false,
+      message:
+        "❌ אי אפשר לתת Ban למשתמש הזה."
+    };
+  }
+
+  return {
+    ok: true
+  };
+}
+
+async function applySelectedWarnAction({
+  interaction,
+  member,
+  user,
+  action,
+  duration,
+  reason
+}) {
+  if (action === "none") {
+    return {
+      applied: true,
+      label: "Warn בלבד"
+    };
+  }
+
+  if (action === "voice-mute") {
+    await member.voice.setMute(
+      true,
+      `${reason} | Warn action by ${interaction.user.tag}`
+    );
+
+    addModTimer({
+      guildId: interaction.guild.id,
+      userId: user.id,
+      type: "voice-mute",
+      expiresAt: Date.now() + duration,
+      reason,
+      moderatorId: interaction.user.id
+    });
+
+    return {
+      applied: true,
+      label:
+        `Voice Mute ל־${formatDuration(duration)}`
+    };
+  }
+
+  if (action === "chat-mute") {
+    const muteRole =
+      await interaction.guild.roles
+        .fetch(config.muteRoleId);
+
+    await member.roles.add(
+      muteRole,
+      `${reason} | Warn action by ${interaction.user.tag}`
+    );
+
+    addModTimer({
+      guildId: interaction.guild.id,
+      userId: user.id,
+      type: "chat-mute",
+      expiresAt: Date.now() + duration,
+      reason,
+      moderatorId: interaction.user.id
+    });
+
+    return {
+      applied: true,
+      label:
+        `Chat Mute ל־${formatDuration(duration)}`
+    };
+  }
+
+  if (action === "timeout") {
+    await member.timeout(
+      duration,
+      `${reason} | Warn action by ${interaction.user.tag}`
+    );
+
+    return {
+      applied: true,
+      label:
+        `Timeout ל־${formatDuration(duration)}`
+    };
+  }
+
+  if (action === "ban") {
+    await interaction.guild.members.ban(
+      user.id,
+      {
+        reason:
+          `${reason} | Warn action by ${interaction.user.tag}`
+      }
+    );
+
+    return {
+      applied: true,
+      label: "Ban"
+    };
+  }
+
+  return {
+    applied: false,
+    label: "לא ידוע"
+  };
+}
+
+function containsBlockedLink(content) {
+  const text =
+    String(content || "");
+
+  const linkRegex =
+    /(?:https?:\/\/|ftp:\/\/|www\.|discord\.gg\/|discord(?:app)?\.com\/invite\/|discord\.com\/channels\/|(?:[a-z0-9-]+\.)+(?:com|net|org|gg|io|co|il|me|tv|xyz|dev|app|link|site|info|ly|be)(?:\/[^\s]*)?)/i;
+
+  return linkRegex.test(text);
+}
+
+async function handleAntiLink(message) {
+  if (!message.guild) return false;
+  if (message.author.bot) return false;
+
+  // Staff/Admin can send links when needed.
+  if (isStaff(message.member)) {
+    return false;
+  }
+
+  if (
+    !containsBlockedLink(
+      message.content
+    )
+  ) {
+    return false;
+  }
+
+  await message.delete().catch(error => {
+    console.error(
+      "❌ Anti-Link delete error:",
+      error
+    );
+  });
+
+  const warning =
+    createWarning({
+      guildId: message.guild.id,
+      userId: message.author.id,
+      moderatorId:
+        client.user?.id ||
+        message.guild.members.me?.id,
+      reason: "שליחת קישור אסור",
+      action: "auto-link"
+    });
+
+  const userWarnData =
+    getUserWarnings(
+      message.guild.id,
+      message.author.id
+    );
+
+  const warnCount =
+    userWarnData.warns.length;
+
+  const member =
+    message.member ||
+    await message.guild.members
+      .fetch(message.author.id)
+      .catch(() => null);
+
+  const autoPunishment =
+    member
+      ? await applyWarnPunishment(
+          message.guild,
+          member,
+          userWarnData,
+          client.user
+        )
+      : null;
+
+  let autoText = "";
+
+  if (autoPunishment?.applied) {
+    autoText =
+      `\n⏳ עונש אוטומטי: Timeout ל־${autoPunishment.label}.`;
+  }
+
+  await message.author.send(
+    `⚠️ קיבלת Warn אוטומטי בשרת **${message.guild.name}**.\n` +
+    `ID: **${warning.id}**\n` +
+    "סיבה: שליחת קישור אסור\n" +
+    `סה"כ Warns פעילים: **${warnCount}**` +
+    autoText
+  ).catch(() => {});
+
+  await sendModLog(
+    message.guild,
+    buildModEmbed(
+      "🔗 Anti-Link Warn",
+      "Red",
+      [
+        {
+          name: "משתמש",
+          value: `${message.author}`
+        },
+        {
+          name: "Warn ID",
+          value: warning.id
+        },
+        {
+          name: "סיבה",
+          value: "שליחת קישור אסור"
+        },
+        {
+          name: "Warns פעילים",
+          value: `${warnCount}`
+        },
+        {
+          name: "עונש אוטומטי",
+          value:
+            autoPunishment?.applied
+              ? `Timeout ל־${autoPunishment.label}`
+              : "אין"
+        }
+      ]
+    )
+  );
+
+  const notice =
+    await message.channel.send({
+      content:
+        `🚫 ${message.author} אסור לשלוח קישורים. קיבלת Warn **${warning.id}**.`,
+      allowedMentions: {
+        users: [message.author.id]
+      }
+    }).catch(() => null);
+
+  if (notice) {
+    setTimeout(() => {
+      notice.delete().catch(() => {});
+    }, 6000);
+  }
+
+  return true;
+}
+
 function warningListText(warns) {
   if (!warns.length) {
     return "אין אזהרות פעילות.";
@@ -350,8 +768,15 @@ function warningListText(warns) {
       warn.reason || "לא צוינה סיבה"
     ).slice(0, 160);
 
+    const actionText =
+      getWarnActionDetails(
+        warn.action || "none",
+        warn.durationMs || null
+      );
+
     return (
       `**${warn.id}** • ${shortReason}\n` +
+      `פעולה: **${actionText}**\n` +
       `צוות: <@${warn.moderatorId}> • <t:${timestamp}:R>`
     );
   });
@@ -2104,6 +2529,10 @@ client.on(Events.MessageCreate, async message => {
     if (!message.guild) return;
     if (message.author.bot) return;
 
+    if (await handleAntiLink(message)) {
+      return;
+    }
+
     const prefix = String(
       config.xpPrefix || "!"
     );
@@ -2231,7 +2660,7 @@ client.on(Events.MessageCreate, async message => {
       return playSlots(message, args);
     }
   } catch (error) {
-    console.error("❌ XP prefix command error:", error);
+    console.error("❌ MessageCreate handler error:", error);
 
     return message.reply(
       "❌ הייתה שגיאה במערכת ה־XP."
@@ -3078,9 +3507,27 @@ client.on(Events.InteractionCreate, async interaction => {
         const user =
           interaction.options.getUser("user");
 
+        const action =
+          interaction.options.getString(
+            "action"
+          ) || "none";
+
+        const durationText =
+          interaction.options.getString(
+            "duration"
+          );
+
         const reason =
           interaction.options.getString("reason") ||
           "לא צוינה סיבה";
+
+        const duration =
+          durationText
+            ? parseDuration(
+                durationText,
+                28
+              )
+            : null;
 
         const member =
           await getGuildMember(
@@ -3112,11 +3559,32 @@ client.on(Events.InteractionCreate, async interaction => {
           });
         }
 
+        const validation =
+          await validateSelectedWarnAction({
+            interaction,
+            member,
+            action,
+            duration
+          });
+
+        if (!validation.ok) {
+          return replyToInteraction(
+            interaction,
+            {
+              content:
+                validation.message,
+              ephemeral: true
+            }
+          );
+        }
+
         const warning = createWarning({
           guildId: interaction.guild.id,
           userId: user.id,
           moderatorId: interaction.user.id,
-          reason
+          reason,
+          action,
+          durationMs: duration
         });
 
         const userWarnData =
@@ -3128,24 +3596,70 @@ client.on(Events.InteractionCreate, async interaction => {
         const warnCount =
           userWarnData.warns.length;
 
-        const autoPunishment =
-          await applyWarnPunishment(
-            interaction.guild,
-            member,
-            userWarnData,
-            interaction.user
+        let selectedAction = null;
+
+        try {
+          selectedAction =
+            await applySelectedWarnAction({
+              interaction,
+              member,
+              user,
+              action,
+              duration,
+              reason
+            });
+        } catch (error) {
+          console.error(
+            "❌ Selected warn action error:",
+            error
           );
+
+          selectedAction = {
+            applied: false,
+            label:
+              getWarnActionDetails(
+                action,
+                duration
+              )
+          };
+        }
+
+        // Keep the original cumulative 3/5/7 Warn punishment
+        // only when this Warn was "Warn only", avoiding double punishments.
+        const autoPunishment =
+          action === "none"
+            ? await applyWarnPunishment(
+                interaction.guild,
+                member,
+                userWarnData,
+                interaction.user
+              )
+            : null;
 
         let punishmentText = "";
 
-        if (autoPunishment?.applied) {
+        if (
+          action !== "none" &&
+          selectedAction?.applied
+        ) {
           punishmentText =
+            `\n🛡️ פעולה: **${selectedAction.label}**.`;
+        } else if (
+          action !== "none" &&
+          !selectedAction?.applied
+        ) {
+          punishmentText =
+            `\n⚠️ ה־Warn נשמר, אבל הפעולה **${getWarnActionDetails(action, duration)}** נכשלה.`;
+        }
+
+        if (autoPunishment?.applied) {
+          punishmentText +=
             `\n⏳ עונש אוטומטי: Timeout ל־**${autoPunishment.label}**.`;
         } else if (
           autoPunishment &&
           !autoPunishment.applied
         ) {
-          punishmentText =
+          punishmentText +=
             `\n⚠️ הגיע לסף של ${autoPunishment.count} Warns, ` +
             "אבל לא הצלחתי לתת Timeout אוטומטי.";
         }
@@ -3154,6 +3668,7 @@ client.on(Events.InteractionCreate, async interaction => {
           `⚠️ קיבלת אזהרה בשרת **${interaction.guild.name}**.\n` +
           `ID: **${warning.id}**\n` +
           `סיבה: ${reason}\n` +
+          `פעולה: ${getWarnActionDetails(action, duration)}\n` +
           `סה"כ Warns פעילים: **${warnCount}**` +
           punishmentText
         ).catch(() => {});
@@ -3181,18 +3696,34 @@ client.on(Events.InteractionCreate, async interaction => {
                 value: reason
               },
               {
+                name: "פעולה שנבחרה",
+                value:
+                  getWarnActionDetails(
+                    action,
+                    duration
+                  )
+              },
+              {
                 name: "Warns פעילים",
                 value: `${warnCount}`
               },
               {
-                name: "עונש אוטומטי",
+                name: "תוצאה",
                 value:
-                  autoPunishment?.applied
-                    ? `Timeout ל־${autoPunishment.label}`
+                  action !== "none"
+                    ? (
+                        selectedAction?.applied
+                          ? "הפעולה בוצעה"
+                          : "ה־Warn נשמר, הפעולה נכשלה"
+                      )
                     : (
-                        autoPunishment
-                          ? "הגיע לסף, אך ה־Timeout נכשל"
-                          : "אין"
+                        autoPunishment?.applied
+                          ? `Timeout אוטומטי ל־${autoPunishment.label}`
+                          : (
+                              autoPunishment
+                                ? "הגיע לסף, אך ה־Timeout נכשל"
+                                : "Warn בלבד"
+                            )
                       )
               }
             ]
