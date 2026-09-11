@@ -89,7 +89,57 @@ const commands = [
         .setRequired(false)
     ),
 
-  userReasonCommand("warn", "נותן אזהרה למשתמש"),
+  new SlashCommandBuilder()
+    .setName("warn")
+    .setDescription("נותן Warn ובוחר פעולה")
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription("המשתמש")
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option
+        .setName("action")
+        .setDescription("מה לעשות יחד עם ה-Warn")
+        .setRequired(true)
+        .addChoices(
+          { name: "Warn בלבד", value: "none" },
+          { name: "Voice Mute", value: "voice-mute" },
+          { name: "Chat Mute", value: "chat-mute" },
+          { name: "Timeout", value: "timeout" },
+          { name: "Ban", value: "ban" }
+        )
+    )
+    .addStringOption(option =>
+      option
+        .setName("duration")
+        .setDescription("חובה ל-Voice Mute / Chat Mute / Timeout")
+        .setRequired(false)
+        .addChoices(
+          { name: "10 שניות", value: "10s" },
+          { name: "30 שניות", value: "30s" },
+          { name: "דקה", value: "1m" },
+          { name: "5 דקות", value: "5m" },
+          { name: "10 דקות", value: "10m" },
+          { name: "30 דקות", value: "30m" },
+          { name: "שעה", value: "1h" },
+          { name: "שעתיים", value: "2h" },
+          { name: "6 שעות", value: "6h" },
+          { name: "12 שעות", value: "12h" },
+          { name: "יום", value: "1d" },
+          { name: "3 ימים", value: "3d" },
+          { name: "7 ימים", value: "7d" },
+          { name: "14 ימים", value: "14d" },
+          { name: "28 ימים", value: "28d" }
+        )
+    )
+    .addStringOption(option =>
+      option
+        .setName("reason")
+        .setDescription("סיבה")
+        .setRequired(false)
+    ),
 
   new SlashCommandBuilder()
     .setName("warnings")
