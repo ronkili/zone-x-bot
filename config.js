@@ -27,7 +27,7 @@ module.exports = {
   ticketCategoryId: "1545339458176684143",
 
   // רול הצוות שמטפל בכל הטיקטים הרגילים
-  ticketStaffRoleId: "1508813260412027063",
+  ticketStaffRoleId: "1508813254074564761",
 
   // רול נפרד שרק הוא רואה ומטפל בטיקט "בחינה לצוות"
   staffTestTicketRoleId: "1508813258004627557",
