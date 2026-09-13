@@ -80,6 +80,73 @@ const commands = [
     .setDescription("שולח את פאנל ה־XP Shop של Zone X"),
 
   new SlashCommandBuilder()
+    .setName("role-request")
+    .setDescription("שולח בקשה לרול VIP / Staff / Friend")
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription("המשתמש שעבורו מבקשים את הרול")
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option
+        .setName("role")
+        .setDescription("איזה רול לבקש")
+        .setRequired(true)
+        .addChoices(
+          { name: "VIP", value: "vip" },
+          { name: "Staff", value: "staff" },
+          { name: "Friend", value: "friend" }
+        )
+    )
+    .addStringOption(option =>
+      option
+        .setName("reason")
+        .setDescription("למה המשתמש צריך לקבל את הרול")
+        .setRequired(true)
+        .setMinLength(3)
+        .setMaxLength(500)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("role-requests")
+    .setDescription("מציג כמה בקשות רול זמינות נשארו לך"),
+
+  new SlashCommandBuilder()
+    .setName("add-role-request")
+    .setDescription("מוסיף בקשות רול למשתמש - Owners בלבד")
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription("המשתמש שיקבל בקשות רול")
+        .setRequired(true)
+    )
+    .addIntegerOption(option =>
+      option
+        .setName("amount")
+        .setDescription("כמה בקשות להוסיף")
+        .setRequired(true)
+        .setMinValue(1)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("remove-role-request")
+    .setDescription("מוריד בקשות רול ממשתמש - Owners בלבד")
+    .addUserOption(option =>
+      option
+        .setName("user")
+        .setDescription("המשתמש שממנו יורידו בקשות רול")
+        .setRequired(true)
+    )
+    .addIntegerOption(option =>
+      option
+        .setName("amount")
+        .setDescription("כמה בקשות להוריד")
+        .setRequired(true)
+        .setMinValue(1)
+    ),
+
+  new SlashCommandBuilder()
     .setName("rank")
     .setDescription("מציג את הסטטיסטיקות של משתמש ב-Zone X")
     .addUserOption(option =>
