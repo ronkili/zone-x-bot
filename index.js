@@ -35,6 +35,11 @@ const RESTRAINING_ORDERS_FILE = path.join(
   "restraining-orders.json"
 );
 
+const ROLE_REQUESTS_FILE = path.join(
+  DATA_DIR,
+  "role-requests.json"
+);
+
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
@@ -86,6 +91,11 @@ const restrainingOrdersData = loadJson(
 
 const restrainingDisconnectLocks = new Set();
 
+const roleRequestsData = loadJson(
+  ROLE_REQUESTS_FILE,
+  {}
+);
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -112,6 +122,244 @@ function hasPunishmentAccess(member) {
       config.punishmentRoleId
     )
   );
+}
+
+// =====================
+// ROLE REQUESTS
+// =====================
+
+const ROLE_REQUESTS_PER_MONTH = 3;
+
+function hasRoleRequestConfig() {
+  return Boolean(
+    config.staffRoleId &&
+    config.ownerRoleId &&
+    config.vipRoleId &&
+    config.friendRoleId &&
+    config.roleRequestsChannelId
+  );
+}
+
+function isRoleRequestOwner(member) {
+  return Boolean(
+    config.ownerRoleId &&
+    member?.roles?.cache?.has(
+      config.ownerRoleId
+    )
+  );
+}
+
+function getRoleRequestType(roleKey) {
+  const roles = {
+    vip: {
+      key: "vip",
+      name: "VIP",
+      emoji: "👑",
+      roleId: config.vipRoleId
+    },
+    staff: {
+      key: "staff",
+      name: "Staff",
+      emoji: "🛡️",
+      roleId: config.staffRoleId
+    },
+    friend: {
+      key: "friend",
+      name: "Friend",
+      emoji: "💙",
+      roleId: config.friendRoleId
+    }
+  };
+
+  return roles[
+    String(roleKey || "")
+      .toLowerCase()
+  ] || null;
+}
+
+function getRoleRequestMonthIndex(
+  date = new Date()
+) {
+  return (
+    date.getUTCFullYear() * 12 +
+    date.getUTCMonth()
+  );
+}
+
+function getRoleRequestMonthKey(
+  date = new Date()
+) {
+  return (
+    `${date.getUTCFullYear()}-` +
+    `${String(
+      date.getUTCMonth() + 1
+    ).padStart(2, "0")}`
+  );
+}
+
+function getRoleRequestAccount(userId) {
+  const currentMonthIndex =
+    getRoleRequestMonthIndex();
+
+  if (!roleRequestsData[userId]) {
+    roleRequestsData[userId] = {
+      balance:
+        ROLE_REQUESTS_PER_MONTH,
+      lastGrantMonthIndex:
+        currentMonthIndex,
+      lastGrantMonth:
+        getRoleRequestMonthKey(),
+      totalApproved: 0,
+      totalReceived:
+        ROLE_REQUESTS_PER_MONTH
+    };
+
+    saveJson(
+      ROLE_REQUESTS_FILE,
+      roleRequestsData
+    );
+
+    return roleRequestsData[userId];
+  }
+
+  const account =
+    roleRequestsData[userId];
+
+  if (
+    !Number.isInteger(
+      account.balance
+    )
+  ) {
+    account.balance = 0;
+  }
+
+  if (
+    !Number.isInteger(
+      account.totalApproved
+    )
+  ) {
+    account.totalApproved = 0;
+  }
+
+  if (
+    !Number.isInteger(
+      account.totalReceived
+    )
+  ) {
+    account.totalReceived = 0;
+  }
+
+  const lastMonthIndex =
+    Number.isInteger(
+      account.lastGrantMonthIndex
+    )
+      ? account.lastGrantMonthIndex
+      : currentMonthIndex;
+
+  const monthsPassed =
+    Math.max(
+      0,
+      currentMonthIndex -
+      lastMonthIndex
+    );
+
+  if (monthsPassed > 0) {
+    const added =
+      monthsPassed *
+      ROLE_REQUESTS_PER_MONTH;
+
+    account.balance += added;
+    account.totalReceived += added;
+    account.lastGrantMonthIndex =
+      currentMonthIndex;
+    account.lastGrantMonth =
+      getRoleRequestMonthKey();
+
+    saveJson(
+      ROLE_REQUESTS_FILE,
+      roleRequestsData
+    );
+  }
+
+  return account;
+}
+
+function useRoleRequest(userId) {
+  const account =
+    getRoleRequestAccount(userId);
+
+  if (account.balance < 1) {
+    return {
+      success: false,
+      account
+    };
+  }
+
+  account.balance -= 1;
+  account.totalApproved += 1;
+
+  saveJson(
+    ROLE_REQUESTS_FILE,
+    roleRequestsData
+  );
+
+  return {
+    success: true,
+    account
+  };
+}
+
+function refundRoleRequest(account) {
+  account.balance += 1;
+
+  account.totalApproved =
+    Math.max(
+      0,
+      account.totalApproved - 1
+    );
+
+  saveJson(
+    ROLE_REQUESTS_FILE,
+    roleRequestsData
+  );
+}
+
+function roleRequestButtons(
+  roleKey,
+  targetId,
+  requesterId,
+  disabled = false
+) {
+  return [
+    new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId(
+            `role_request_approve:${roleKey}:${targetId}:${requesterId}`
+          )
+          .setLabel("אישור")
+          .setEmoji("✅")
+          .setStyle(
+            ButtonStyle.Success
+          )
+          .setDisabled(
+            disabled
+          ),
+
+        new ButtonBuilder()
+          .setCustomId(
+            `role_request_deny:${roleKey}:${targetId}:${requesterId}`
+          )
+          .setLabel("דחייה")
+          .setEmoji("❌")
+          .setStyle(
+            ButtonStyle.Danger
+          )
+          .setDisabled(
+            disabled
+          )
+      )
+  ];
 }
 
 function parseDuration(input, maxDays = 30) {
@@ -3423,6 +3671,495 @@ client.on(Events.InteractionCreate, async interaction => {
         }
       }
 
+      if (
+        interaction.commandName ===
+        "role-request"
+      ) {
+        try {
+          if (!hasRoleRequestConfig()) {
+            return replyToInteraction(
+              interaction,
+              {
+                content:
+                  "❌ חסרים IDs של מערכת בקשות הרולים ב־config.js.",
+                ephemeral: true
+              }
+            );
+          }
+
+          if (!isStaff(interaction.member)) {
+            return replyToInteraction(
+              interaction,
+              {
+                content:
+                  "❌ רק צוות Zone X יכול לשלוח בקשת רול.",
+                ephemeral: true
+              }
+            );
+          }
+
+          const account =
+            getRoleRequestAccount(
+              interaction.user.id
+            );
+
+          if (account.balance < 1) {
+            return replyToInteraction(
+              interaction,
+              {
+                content:
+                  "❌ אין לך כרגע בקשות רול זמינות. " +
+                  `תקבל עוד ${ROLE_REQUESTS_PER_MONTH} בתחילת החודש הבא.`,
+                ephemeral: true
+              }
+            );
+          }
+
+          const target =
+            interaction.options
+              .getUser("user");
+
+          const roleKey =
+            interaction.options
+              .getString("role");
+
+          const reason =
+            interaction.options
+              .getString("reason");
+
+          const roleType =
+            getRoleRequestType(
+              roleKey
+            );
+
+          if (
+            !target ||
+            !roleType ||
+            !reason
+          ) {
+            return replyToInteraction(
+              interaction,
+              {
+                content:
+                  "❌ חסר משתמש, רול או הסבר לבקשה.",
+                ephemeral: true
+              }
+            );
+          }
+
+          if (target.bot) {
+            return replyToInteraction(
+              interaction,
+              {
+                content:
+                  "❌ אי אפשר לבקש רול עבור בוט.",
+                ephemeral: true
+              }
+            );
+          }
+
+          const targetMember =
+            await interaction.guild.members
+              .fetch(target.id)
+              .catch(() => null);
+
+          if (!targetMember) {
+            return replyToInteraction(
+              interaction,
+              {
+                content:
+                  "❌ לא מצאתי את המשתמש הזה בשרת.",
+                ephemeral: true
+              }
+            );
+          }
+
+          const requestedRole =
+            await interaction.guild.roles
+              .fetch(
+                roleType.roleId
+              )
+              .catch(() => null);
+
+          if (!requestedRole) {
+            return replyToInteraction(
+              interaction,
+              {
+                content:
+                  `❌ לא מצאתי את רול ${roleType.name}. בדוק את ה־ID ב־config.js.`,
+                ephemeral: true
+              }
+            );
+          }
+
+          if (
+            targetMember.roles.cache.has(
+              requestedRole.id
+            )
+          ) {
+            return replyToInteraction(
+              interaction,
+              {
+                content:
+                  `❌ למשתמש הזה כבר יש את רול **${roleType.name}**.`,
+                ephemeral: true
+              }
+            );
+          }
+
+          const requestsChannel =
+            await interaction.guild.channels
+              .fetch(
+                config.roleRequestsChannelId
+              )
+              .catch(() => null);
+
+          if (
+            !requestsChannel?.isTextBased()
+          ) {
+            return replyToInteraction(
+              interaction,
+              {
+                content:
+                  "❌ לא מצאתי את חדר בקשות הרולים. בדוק `roleRequestsChannelId`.",
+                ephemeral: true
+              }
+            );
+          }
+
+          const botMember =
+            await interaction.guild.members
+              .fetchMe()
+              .catch(() => null);
+
+          const permissions =
+            botMember
+              ? requestsChannel
+                  .permissionsFor(
+                    botMember
+                  )
+              : null;
+
+          if (
+            !permissions?.has(
+              PermissionFlagsBits.ViewChannel
+            ) ||
+            !permissions?.has(
+              PermissionFlagsBits.SendMessages
+            ) ||
+            !permissions?.has(
+              PermissionFlagsBits.EmbedLinks
+            )
+          ) {
+            return replyToInteraction(
+              interaction,
+              {
+                content:
+                  "❌ לבוט חסרות הרשאות בחדר בקשות הרולים.\n" +
+                  "צריך: View Channel, Send Messages ו־Embed Links.",
+                ephemeral: true
+              }
+            );
+          }
+
+          const requestEmbed =
+            new EmbedBuilder()
+              .setColor("Gold")
+              .setTitle(
+                `${roleType.emoji} בקשת רול חדשה — ${roleType.name}`
+              )
+              .addFields(
+                {
+                  name:
+                    "👤 נשלחה על ידי",
+                  value:
+                    `${interaction.user} (\`${interaction.user.id}\`)`
+                },
+                {
+                  name:
+                    "🎯 בקשה עבור",
+                  value:
+                    `${target} (\`${target.id}\`)`
+                },
+                {
+                  name:
+                    "🎭 רול מבוקש",
+                  value:
+                    `${roleType.emoji} **${roleType.name}**`
+                },
+                {
+                  name:
+                    "📝 סיבה",
+                  value:
+                    reason.slice(
+                      0,
+                      1024
+                    )
+                },
+                {
+                  name:
+                    "🎟️ בקשות זמינות למבקש",
+                  value:
+                    `**${account.balance}**\n` +
+                    "בקשה תרד רק אם Owner יאשר."
+                }
+              )
+              .setThumbnail(
+                target.displayAvatarURL()
+              )
+              .setFooter({
+                text:
+                  "רק בעלי רול Owner יכולים לאשר או לדחות"
+              })
+              .setTimestamp();
+
+          await requestsChannel.send({
+            content:
+              `<@&${config.ownerRoleId}>`,
+            embeds: [
+              requestEmbed
+            ],
+            components:
+              roleRequestButtons(
+                roleType.key,
+                target.id,
+                interaction.user.id
+              ),
+            allowedMentions: {
+              roles: [
+                config.ownerRoleId
+              ]
+            }
+          });
+
+          return replyToInteraction(
+            interaction,
+            {
+              content:
+                `✅ בקשת **${roleType.name}** עבור ${target} נשלחה ל־Owners.\n` +
+                `🎟️ יש לך כרגע **${account.balance}** בקשות זמינות. ` +
+                "הבקשה תרד רק אם תאושר.",
+              ephemeral: true
+            }
+          );
+        } catch (error) {
+          console.error(
+            "❌ Role request error:",
+            error
+          );
+
+          return replyToInteraction(
+            interaction,
+            {
+              content:
+                "❌ הייתה שגיאה בשליחת בקשת הרול.\n" +
+                `שגיאה: \`${error.code || error.message}\``,
+              ephemeral: true
+            }
+          ).catch(() => {});
+        }
+      }
+
+      if (
+        interaction.commandName ===
+        "role-requests"
+      ) {
+        if (!hasRoleRequestConfig()) {
+          return replyToInteraction(
+            interaction,
+            {
+              content:
+                "❌ חסרים IDs של מערכת בקשות הרולים ב־config.js.",
+              ephemeral: true
+            }
+          );
+        }
+
+        if (!isStaff(interaction.member)) {
+          return replyToInteraction(
+            interaction,
+            {
+              content:
+                "❌ רק צוות Zone X יכול לבדוק בקשות רול.",
+              ephemeral: true
+            }
+          );
+        }
+
+        const account =
+          getRoleRequestAccount(
+            interaction.user.id
+          );
+
+        return replyToInteraction(
+          interaction,
+          {
+            embeds: [
+              new EmbedBuilder()
+                .setColor("Gold")
+                .setTitle(
+                  "🎭 מאגר בקשות רול"
+                )
+                .setDescription(
+                  `🎟️ בקשות זמינות: **${account.balance}**\n` +
+                  `➕ תוספת חודשית: **${ROLE_REQUESTS_PER_MONTH}**\n` +
+                  `✅ בקשות שאושרו בסך הכול: **${account.totalApproved}**\n\n` +
+                  "בקשות שלא נוצלו נשמרות ומצטברות לחודשים הבאים."
+                )
+                .setFooter({
+                  text:
+                    `העדכון החודשי האחרון: ` +
+                    `${account.lastGrantMonth || getRoleRequestMonthKey()}`
+                })
+                .setTimestamp()
+            ],
+            ephemeral: true
+          }
+        );
+      }
+
+      if (
+        interaction.commandName ===
+          "add-role-request" ||
+        interaction.commandName ===
+          "remove-role-request"
+      ) {
+        if (!hasRoleRequestConfig()) {
+          return replyToInteraction(
+            interaction,
+            {
+              content:
+                "❌ חסרים IDs של מערכת בקשות הרולים ב־config.js.",
+              ephemeral: true
+            }
+          );
+        }
+
+        if (
+          !isRoleRequestOwner(
+            interaction.member
+          )
+        ) {
+          return replyToInteraction(
+            interaction,
+            {
+              content:
+                "❌ רק Owners יכולים להשתמש בפקודה הזאת.",
+              ephemeral: true
+            }
+          );
+        }
+
+        const target =
+          interaction.options
+            .getUser("user");
+
+        const amount =
+          interaction.options
+            .getInteger("amount");
+
+        if (
+          !target ||
+          !Number.isInteger(
+            amount
+          ) ||
+          amount < 1
+        ) {
+          return replyToInteraction(
+            interaction,
+            {
+              content:
+                "❌ משתמש או כמות לא תקינים.",
+              ephemeral: true
+            }
+          );
+        }
+
+        if (target.bot) {
+          return replyToInteraction(
+            interaction,
+            {
+              content:
+                "❌ אי אפשר לשנות בקשות רול של בוט.",
+              ephemeral: true
+            }
+          );
+        }
+
+        const account =
+          getRoleRequestAccount(
+            target.id
+          );
+
+        const before =
+          account.balance;
+
+        const isAdd =
+          interaction.commandName ===
+          "add-role-request";
+
+        if (isAdd) {
+          account.balance += amount;
+          account.totalReceived += amount;
+        } else {
+          account.balance =
+            Math.max(
+              0,
+              account.balance -
+              amount
+            );
+        }
+
+        saveJson(
+          ROLE_REQUESTS_FILE,
+          roleRequestsData
+        );
+
+        return replyToInteraction(
+          interaction,
+          {
+            embeds: [
+              new EmbedBuilder()
+                .setColor(
+                  isAdd
+                    ? "Green"
+                    : "Red"
+                )
+                .setTitle(
+                  isAdd
+                    ? "➕ נוספו בקשות רול"
+                    : "➖ הוסרו בקשות רול"
+                )
+                .addFields(
+                  {
+                    name: "משתמש",
+                    value: `${target}`
+                  },
+                  {
+                    name: "לפני",
+                    value: `**${before}**`,
+                    inline: true
+                  },
+                  {
+                    name: "אחרי",
+                    value:
+                      `**${account.balance}**`,
+                    inline: true
+                  },
+                  {
+                    name: "שינוי",
+                    value:
+                      `**${isAdd ? "+" : "-"}${amount}**`,
+                    inline: true
+                  }
+                )
+                .setTimestamp()
+            ],
+            ephemeral: true
+          }
+        );
+      }
+
       const moderationCommands = [
         "rank",
         "warn",
@@ -5260,6 +5997,315 @@ client.on(Events.InteractionCreate, async interaction => {
         ],
         components: [claimedRow]
       });
+    }
+
+    if (
+      interaction.customId.startsWith(
+        "role_request_approve:"
+      ) ||
+      interaction.customId.startsWith(
+        "role_request_deny:"
+      )
+    ) {
+      try {
+        if (!hasRoleRequestConfig()) {
+          return interaction.reply({
+            content:
+              "❌ חסרים IDs של מערכת בקשות הרולים ב־config.js.",
+            ephemeral: true
+          });
+        }
+
+        if (
+          !isRoleRequestOwner(
+            interaction.member
+          )
+        ) {
+          return interaction.reply({
+            content:
+              "❌ רק מי שיש לו את רול ה־Owner יכול לטפל בבקשה.",
+            ephemeral: true
+          });
+        }
+
+        const [
+          action,
+          roleKey,
+          targetId,
+          requesterId
+        ] =
+          interaction.customId
+            .split(":");
+
+        const roleType =
+          getRoleRequestType(
+            roleKey
+          );
+
+        if (!roleType) {
+          return interaction.reply({
+            content:
+              "❌ סוג הרול בבקשה לא תקין.",
+            ephemeral: true
+          });
+        }
+
+        const approved =
+          action ===
+          "role_request_approve";
+
+        if (!approved) {
+          const deniedEmbed =
+            EmbedBuilder
+              .from(
+                interaction.message
+                  .embeds[0]
+              )
+              .setColor("Red")
+              .setTitle(
+                `❌ בקשת ${roleType.name} נדחתה`
+              )
+              .addFields({
+                name:
+                  "טופל על ידי",
+                value:
+                  `${interaction.user}`
+              })
+              .setTimestamp();
+
+          await interaction.update({
+            content: "",
+            embeds: [
+              deniedEmbed
+            ],
+            components:
+              roleRequestButtons(
+                roleType.key,
+                targetId,
+                requesterId,
+                true
+              )
+          });
+
+          const requester =
+            await interaction.guild.members
+              .fetch(
+                requesterId
+              )
+              .catch(() => null);
+
+          requester?.send(
+            `❌ בקשת ה־${roleType.name} ששלחת עבור <@${targetId}> נדחתה על ידי ${interaction.user.tag}.`
+          ).catch(() => {});
+
+          return;
+        }
+
+        await interaction.deferUpdate();
+
+        const targetMember =
+          await interaction.guild.members
+            .fetch(
+              targetId
+            )
+            .catch(() => null);
+
+        const requestedRole =
+          await interaction.guild.roles
+            .fetch(
+              roleType.roleId
+            )
+            .catch(() => null);
+
+        const botMember =
+          await interaction.guild.members
+            .fetchMe()
+            .catch(() => null);
+
+        if (!targetMember) {
+          return interaction.followUp({
+            content:
+              "❌ המשתמש כבר לא נמצא בשרת.",
+            ephemeral: true
+          });
+        }
+
+        if (!requestedRole) {
+          return interaction.followUp({
+            content:
+              `❌ רול ${roleType.name} לא נמצא.`,
+            ephemeral: true
+          });
+        }
+
+        if (
+          targetMember.roles.cache.has(
+            requestedRole.id
+          )
+        ) {
+          return interaction.followUp({
+            content:
+              `❌ למשתמש כבר יש את רול ${roleType.name}. הבקשה לא ירדה.`,
+            ephemeral: true
+          });
+        }
+
+        if (
+          !botMember?.permissions.has(
+            PermissionFlagsBits.ManageRoles
+          )
+        ) {
+          return interaction.followUp({
+            content:
+              "❌ לבוט אין Manage Roles.",
+            ephemeral: true
+          });
+        }
+
+        if (
+          requestedRole.managed ||
+          requestedRole.position >=
+            botMember.roles.highest.position
+        ) {
+          return interaction.followUp({
+            content:
+              `❌ רול הבוט חייב להיות מעל רול ${roleType.name}.`,
+            ephemeral: true
+          });
+        }
+
+        if (!targetMember.manageable) {
+          return interaction.followUp({
+            content:
+              "❌ הבוט לא יכול לנהל את המשתמש הזה. תעלה את רול הבוט מעל הרול שלו.",
+            ephemeral: true
+          });
+        }
+
+        const requestUse =
+          useRoleRequest(
+            requesterId
+          );
+
+        if (!requestUse.success) {
+          return interaction.followUp({
+            content:
+              "❌ למי ששלח את הבקשה כבר אין בקשות רול זמינות. " +
+              "הבקשה לא אושרה ולא בוצע שינוי.",
+            ephemeral: true
+          });
+        }
+
+        const roleAdded =
+          await targetMember.roles
+            .add(
+              requestedRole,
+              `${roleType.name} request approved by ${interaction.user.tag}`
+            )
+            .then(() => true)
+            .catch(error => {
+              console.error(
+                "❌ Role request role add error:",
+                error
+              );
+
+              return false;
+            });
+
+        if (!roleAdded) {
+          refundRoleRequest(
+            requestUse.account
+          );
+
+          return interaction.followUp({
+            content:
+              `❌ לא הצלחתי להוסיף את רול ${roleType.name}. ` +
+              "הבקשה הוחזרה למבקש. בדוק הרשאות ומיקום רולים.",
+            ephemeral: true
+          });
+        }
+
+        const approvedEmbed =
+          EmbedBuilder
+            .from(
+              interaction.message
+                .embeds[0]
+            )
+            .setColor("Green")
+            .setTitle(
+              `✅ בקשת ${roleType.name} אושרה`
+            )
+            .addFields(
+              {
+                name:
+                  "אושר על ידי",
+                value:
+                  `${interaction.user}`
+              },
+              {
+                name: "תוצאה",
+                value:
+                  `רול ${roleType.name}: **נוסף**\n` +
+                  `בקשות שנותרו למבקש: **${requestUse.account.balance}**`
+              }
+            )
+            .setTimestamp();
+
+        await interaction.message.edit({
+          content: "",
+          embeds: [
+            approvedEmbed
+          ],
+          components:
+            roleRequestButtons(
+              roleType.key,
+              targetId,
+              requesterId,
+              true
+            )
+        });
+
+        const requester =
+          await interaction.guild.members
+            .fetch(
+              requesterId
+            )
+            .catch(() => null);
+
+        requester?.send(
+          `✅ בקשת ה־${roleType.name} ששלחת עבור ${targetMember.user.tag} אושרה על ידי ${interaction.user.tag}.`
+        ).catch(() => {});
+
+        targetMember.send(
+          `${roleType.emoji} בקשת הרול שלך אושרה! קיבלת את רול **${roleType.name}** בשרת **${interaction.guild.name}**.`
+        ).catch(() => {});
+
+        return;
+      } catch (error) {
+        console.error(
+          "❌ Role request button error:",
+          error
+        );
+
+        if (
+          interaction.deferred ||
+          interaction.replied
+        ) {
+          return interaction.followUp({
+            content:
+              "❌ הייתה שגיאה בטיפול בבקשת הרול.\n" +
+              `שגיאה: \`${error.code || error.message}\``,
+            ephemeral: true
+          }).catch(() => {});
+        }
+
+        return interaction.reply({
+          content:
+            "❌ הייתה שגיאה בטיפול בבקשת הרול.\n" +
+            `שגיאה: \`${error.code || error.message}\``,
+          ephemeral: true
+        }).catch(() => {});
+      }
     }
 
     if (interaction.customId.startsWith("xp_shop_buy:")) {
