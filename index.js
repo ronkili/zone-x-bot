@@ -35,9 +35,9 @@ const RESTRAINING_ORDERS_FILE = path.join(
   "restraining-orders.json"
 );
 
-const ROLE_REQUESTS_FILE = path.join(
+const STAFF_FRIEND_REQUESTS_FILE = path.join(
   DATA_DIR,
-  "role-requests.json"
+  "staff-friend-requests.json"
 );
 
 if (!fs.existsSync(DATA_DIR)) {
@@ -91,8 +91,8 @@ const restrainingOrdersData = loadJson(
 
 const restrainingDisconnectLocks = new Set();
 
-const roleRequestsData = loadJson(
-  ROLE_REQUESTS_FILE,
+const staffFriendRequestsData = loadJson(
+  STAFF_FRIEND_REQUESTS_FILE,
   {}
 );
 
@@ -125,22 +125,21 @@ function hasPunishmentAccess(member) {
 }
 
 // =====================
-// ROLE REQUESTS
+// STAFF FRIEND REQUESTS
 // =====================
 
-const ROLE_REQUESTS_PER_MONTH = 3;
+const STAFF_FRIEND_REQUESTS_PER_MONTH = 3;
 
-function hasRoleRequestConfig() {
+function hasStaffFriendConfig() {
   return Boolean(
     config.staffRoleId &&
     config.ownerRoleId &&
-    config.vipRoleId &&
-    config.friendRoleId &&
-    config.roleRequestsChannelId
+    config.staffFriendRoleId &&
+    config.staffFriendRequestsChannelId
   );
 }
 
-function isRoleRequestOwner(member) {
+function isStaffFriendOwner(member) {
   return Boolean(
     config.ownerRoleId &&
     member?.roles?.cache?.has(
@@ -149,35 +148,7 @@ function isRoleRequestOwner(member) {
   );
 }
 
-function getRoleRequestType(roleKey) {
-  const roles = {
-    vip: {
-      key: "vip",
-      name: "VIP",
-      emoji: "👑",
-      roleId: config.vipRoleId
-    },
-    staff: {
-      key: "staff",
-      name: "Staff",
-      emoji: "🛡️",
-      roleId: config.staffRoleId
-    },
-    friend: {
-      key: "friend",
-      name: "Friend",
-      emoji: "💙",
-      roleId: config.friendRoleId
-    }
-  };
-
-  return roles[
-    String(roleKey || "")
-      .toLowerCase()
-  ] || null;
-}
-
-function getRoleRequestMonthIndex(
+function getStaffFriendMonthIndex(
   date = new Date()
 ) {
   return (
@@ -186,7 +157,7 @@ function getRoleRequestMonthIndex(
   );
 }
 
-function getRoleRequestMonthKey(
+function getStaffFriendMonthKey(
   date = new Date()
 ) {
   return (
@@ -197,33 +168,35 @@ function getRoleRequestMonthKey(
   );
 }
 
-function getRoleRequestAccount(userId) {
+function getStaffFriendRequestAccount(
+  userId
+) {
   const currentMonthIndex =
-    getRoleRequestMonthIndex();
+    getStaffFriendMonthIndex();
 
-  if (!roleRequestsData[userId]) {
-    roleRequestsData[userId] = {
+  if (!staffFriendRequestsData[userId]) {
+    staffFriendRequestsData[userId] = {
       balance:
-        ROLE_REQUESTS_PER_MONTH,
+        STAFF_FRIEND_REQUESTS_PER_MONTH,
       lastGrantMonthIndex:
         currentMonthIndex,
       lastGrantMonth:
-        getRoleRequestMonthKey(),
+        getStaffFriendMonthKey(),
       totalApproved: 0,
       totalReceived:
-        ROLE_REQUESTS_PER_MONTH
+        STAFF_FRIEND_REQUESTS_PER_MONTH
     };
 
     saveJson(
-      ROLE_REQUESTS_FILE,
-      roleRequestsData
+      STAFF_FRIEND_REQUESTS_FILE,
+      staffFriendRequestsData
     );
 
-    return roleRequestsData[userId];
+    return staffFriendRequestsData[userId];
   }
 
   const account =
-    roleRequestsData[userId];
+    staffFriendRequestsData[userId];
 
   if (
     !Number.isInteger(
@@ -266,27 +239,31 @@ function getRoleRequestAccount(userId) {
   if (monthsPassed > 0) {
     const added =
       monthsPassed *
-      ROLE_REQUESTS_PER_MONTH;
+      STAFF_FRIEND_REQUESTS_PER_MONTH;
 
     account.balance += added;
     account.totalReceived += added;
     account.lastGrantMonthIndex =
       currentMonthIndex;
     account.lastGrantMonth =
-      getRoleRequestMonthKey();
+      getStaffFriendMonthKey();
 
     saveJson(
-      ROLE_REQUESTS_FILE,
-      roleRequestsData
+      STAFF_FRIEND_REQUESTS_FILE,
+      staffFriendRequestsData
     );
   }
 
   return account;
 }
 
-function useRoleRequest(userId) {
+function useStaffFriendRequest(
+  userId
+) {
   const account =
-    getRoleRequestAccount(userId);
+    getStaffFriendRequestAccount(
+      userId
+    );
 
   if (account.balance < 1) {
     return {
@@ -299,8 +276,8 @@ function useRoleRequest(userId) {
   account.totalApproved += 1;
 
   saveJson(
-    ROLE_REQUESTS_FILE,
-    roleRequestsData
+    STAFF_FRIEND_REQUESTS_FILE,
+    staffFriendRequestsData
   );
 
   return {
@@ -309,7 +286,9 @@ function useRoleRequest(userId) {
   };
 }
 
-function refundRoleRequest(account) {
+function refundStaffFriendRequest(
+  account
+) {
   account.balance += 1;
 
   account.totalApproved =
@@ -319,13 +298,12 @@ function refundRoleRequest(account) {
     );
 
   saveJson(
-    ROLE_REQUESTS_FILE,
-    roleRequestsData
+    STAFF_FRIEND_REQUESTS_FILE,
+    staffFriendRequestsData
   );
 }
 
-function roleRequestButtons(
-  roleKey,
+function staffFriendRequestButtons(
   targetId,
   requesterId,
   disabled = false
@@ -335,7 +313,7 @@ function roleRequestButtons(
       .addComponents(
         new ButtonBuilder()
           .setCustomId(
-            `role_request_approve:${roleKey}:${targetId}:${requesterId}`
+            `staff_friend_approve:${targetId}:${requesterId}`
           )
           .setLabel("אישור")
           .setEmoji("✅")
@@ -348,7 +326,7 @@ function roleRequestButtons(
 
         new ButtonBuilder()
           .setCustomId(
-            `role_request_deny:${roleKey}:${targetId}:${requesterId}`
+            `staff_friend_deny:${targetId}:${requesterId}`
           )
           .setLabel("דחייה")
           .setEmoji("❌")
@@ -3673,15 +3651,15 @@ client.on(Events.InteractionCreate, async interaction => {
 
       if (
         interaction.commandName ===
-        "role-request"
+        "staff-friend-request"
       ) {
         try {
-          if (!hasRoleRequestConfig()) {
+          if (!hasStaffFriendConfig()) {
             return replyToInteraction(
               interaction,
               {
                 content:
-                  "❌ חסרים IDs של מערכת בקשות הרולים ב־config.js.",
+                  "❌ חסרים IDs של מערכת Staff Friend ב־config.js.",
                 ephemeral: true
               }
             );
@@ -3692,14 +3670,14 @@ client.on(Events.InteractionCreate, async interaction => {
               interaction,
               {
                 content:
-                  "❌ רק צוות Zone X יכול לשלוח בקשת רול.",
+                  "❌ רק Staff יכול לשלוח בקשת Staff Friend.",
                 ephemeral: true
               }
             );
           }
 
           const account =
-            getRoleRequestAccount(
+            getStaffFriendRequestAccount(
               interaction.user.id
             );
 
@@ -3708,8 +3686,8 @@ client.on(Events.InteractionCreate, async interaction => {
               interaction,
               {
                 content:
-                  "❌ אין לך כרגע בקשות רול זמינות. " +
-                  `תקבל עוד ${ROLE_REQUESTS_PER_MONTH} בתחילת החודש הבא.`,
+                  "❌ אין לך כרגע בקשות Staff Friend זמינות. " +
+                  `תקבל עוד ${STAFF_FRIEND_REQUESTS_PER_MONTH} בתחילת החודש הבא.`,
                 ephemeral: true
               }
             );
@@ -3719,29 +3697,16 @@ client.on(Events.InteractionCreate, async interaction => {
             interaction.options
               .getUser("user");
 
-          const roleKey =
-            interaction.options
-              .getString("role");
-
           const reason =
             interaction.options
               .getString("reason");
 
-          const roleType =
-            getRoleRequestType(
-              roleKey
-            );
-
-          if (
-            !target ||
-            !roleType ||
-            !reason
-          ) {
+          if (!target || !reason) {
             return replyToInteraction(
               interaction,
               {
                 content:
-                  "❌ חסר משתמש, רול או הסבר לבקשה.",
+                  "❌ חסר משתמש או הסבר לבקשה.",
                 ephemeral: true
               }
             );
@@ -3752,7 +3717,7 @@ client.on(Events.InteractionCreate, async interaction => {
               interaction,
               {
                 content:
-                  "❌ אי אפשר לבקש רול עבור בוט.",
+                  "❌ אי אפשר לבקש Staff Friend עבור בוט.",
                 ephemeral: true
               }
             );
@@ -3774,19 +3739,19 @@ client.on(Events.InteractionCreate, async interaction => {
             );
           }
 
-          const requestedRole =
+          const staffFriendRole =
             await interaction.guild.roles
               .fetch(
-                roleType.roleId
+                config.staffFriendRoleId
               )
               .catch(() => null);
 
-          if (!requestedRole) {
+          if (!staffFriendRole) {
             return replyToInteraction(
               interaction,
               {
                 content:
-                  `❌ לא מצאתי את רול ${roleType.name}. בדוק את ה־ID ב־config.js.`,
+                  "❌ לא מצאתי את רול Staff Friend. בדוק `staffFriendRoleId`.",
                 ephemeral: true
               }
             );
@@ -3794,14 +3759,14 @@ client.on(Events.InteractionCreate, async interaction => {
 
           if (
             targetMember.roles.cache.has(
-              requestedRole.id
+              staffFriendRole.id
             )
           ) {
             return replyToInteraction(
               interaction,
               {
                 content:
-                  `❌ למשתמש הזה כבר יש את רול **${roleType.name}**.`,
+                  "❌ למשתמש הזה כבר יש Staff Friend.",
                 ephemeral: true
               }
             );
@@ -3810,7 +3775,7 @@ client.on(Events.InteractionCreate, async interaction => {
           const requestsChannel =
             await interaction.guild.channels
               .fetch(
-                config.roleRequestsChannelId
+                config.staffFriendRequestsChannelId
               )
               .catch(() => null);
 
@@ -3821,7 +3786,7 @@ client.on(Events.InteractionCreate, async interaction => {
               interaction,
               {
                 content:
-                  "❌ לא מצאתי את חדר בקשות הרולים. בדוק `roleRequestsChannelId`.",
+                  "❌ לא מצאתי את חדר בקשות Staff Friend. בדוק `staffFriendRequestsChannelId`.",
                 ephemeral: true
               }
             );
@@ -3855,7 +3820,7 @@ client.on(Events.InteractionCreate, async interaction => {
               interaction,
               {
                 content:
-                  "❌ לבוט חסרות הרשאות בחדר בקשות הרולים.\n" +
+                  "❌ לבוט חסרות הרשאות בחדר הבקשות.\n" +
                   "צריך: View Channel, Send Messages ו־Embed Links.",
                 ephemeral: true
               }
@@ -3866,7 +3831,7 @@ client.on(Events.InteractionCreate, async interaction => {
             new EmbedBuilder()
               .setColor("Gold")
               .setTitle(
-                `${roleType.emoji} בקשת רול חדשה — ${roleType.name}`
+                "🤝 בקשת Staff Friend חדשה"
               )
               .addFields(
                 {
@@ -3880,12 +3845,6 @@ client.on(Events.InteractionCreate, async interaction => {
                     "🎯 בקשה עבור",
                   value:
                     `${target} (\`${target.id}\`)`
-                },
-                {
-                  name:
-                    "🎭 רול מבוקש",
-                  value:
-                    `${roleType.emoji} **${roleType.name}**`
                 },
                 {
                   name:
@@ -3920,8 +3879,7 @@ client.on(Events.InteractionCreate, async interaction => {
               requestEmbed
             ],
             components:
-              roleRequestButtons(
-                roleType.key,
+              staffFriendRequestButtons(
                 target.id,
                 interaction.user.id
               ),
@@ -3936,7 +3894,7 @@ client.on(Events.InteractionCreate, async interaction => {
             interaction,
             {
               content:
-                `✅ בקשת **${roleType.name}** עבור ${target} נשלחה ל־Owners.\n` +
+                `✅ בקשת Staff Friend עבור ${target} נשלחה ל־Owners.\n` +
                 `🎟️ יש לך כרגע **${account.balance}** בקשות זמינות. ` +
                 "הבקשה תרד רק אם תאושר.",
               ephemeral: true
@@ -3944,7 +3902,7 @@ client.on(Events.InteractionCreate, async interaction => {
           );
         } catch (error) {
           console.error(
-            "❌ Role request error:",
+            "❌ Staff Friend request error:",
             error
           );
 
@@ -3952,7 +3910,7 @@ client.on(Events.InteractionCreate, async interaction => {
             interaction,
             {
               content:
-                "❌ הייתה שגיאה בשליחת בקשת הרול.\n" +
+                "❌ הייתה שגיאה בשליחת בקשת Staff Friend.\n" +
                 `שגיאה: \`${error.code || error.message}\``,
               ephemeral: true
             }
@@ -3962,14 +3920,14 @@ client.on(Events.InteractionCreate, async interaction => {
 
       if (
         interaction.commandName ===
-        "role-requests"
+        "staff-friend-requests"
       ) {
-        if (!hasRoleRequestConfig()) {
+        if (!hasStaffFriendConfig()) {
           return replyToInteraction(
             interaction,
             {
               content:
-                "❌ חסרים IDs של מערכת בקשות הרולים ב־config.js.",
+                "❌ חסרים IDs של מערכת Staff Friend ב־config.js.",
               ephemeral: true
             }
           );
@@ -3980,14 +3938,14 @@ client.on(Events.InteractionCreate, async interaction => {
             interaction,
             {
               content:
-                "❌ רק צוות Zone X יכול לבדוק בקשות רול.",
+                "❌ רק Staff יכול לבדוק בקשות Staff Friend.",
               ephemeral: true
             }
           );
         }
 
         const account =
-          getRoleRequestAccount(
+          getStaffFriendRequestAccount(
             interaction.user.id
           );
 
@@ -3998,18 +3956,18 @@ client.on(Events.InteractionCreate, async interaction => {
               new EmbedBuilder()
                 .setColor("Gold")
                 .setTitle(
-                  "🎭 מאגר בקשות רול"
+                  "🤝 מאגר בקשות Staff Friend"
                 )
                 .setDescription(
                   `🎟️ בקשות זמינות: **${account.balance}**\n` +
-                  `➕ תוספת חודשית: **${ROLE_REQUESTS_PER_MONTH}**\n` +
+                  `➕ תוספת חודשית: **${STAFF_FRIEND_REQUESTS_PER_MONTH}**\n` +
                   `✅ בקשות שאושרו בסך הכול: **${account.totalApproved}**\n\n` +
                   "בקשות שלא נוצלו נשמרות ומצטברות לחודשים הבאים."
                 )
                 .setFooter({
                   text:
                     `העדכון החודשי האחרון: ` +
-                    `${account.lastGrantMonth || getRoleRequestMonthKey()}`
+                    `${account.lastGrantMonth || getStaffFriendMonthKey()}`
                 })
                 .setTimestamp()
             ],
@@ -4020,23 +3978,23 @@ client.on(Events.InteractionCreate, async interaction => {
 
       if (
         interaction.commandName ===
-          "add-role-request" ||
+          "add-staff-friend-request" ||
         interaction.commandName ===
-          "remove-role-request"
+          "remove-staff-friend-request"
       ) {
-        if (!hasRoleRequestConfig()) {
+        if (!hasStaffFriendConfig()) {
           return replyToInteraction(
             interaction,
             {
               content:
-                "❌ חסרים IDs של מערכת בקשות הרולים ב־config.js.",
+                "❌ חסרים IDs של מערכת Staff Friend ב־config.js.",
               ephemeral: true
             }
           );
         }
 
         if (
-          !isRoleRequestOwner(
+          !isStaffFriendOwner(
             interaction.member
           )
         ) {
@@ -4080,14 +4038,14 @@ client.on(Events.InteractionCreate, async interaction => {
             interaction,
             {
               content:
-                "❌ אי אפשר לשנות בקשות רול של בוט.",
+                "❌ אי אפשר לשנות בקשות של בוט.",
               ephemeral: true
             }
           );
         }
 
         const account =
-          getRoleRequestAccount(
+          getStaffFriendRequestAccount(
             target.id
           );
 
@@ -4096,7 +4054,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
         const isAdd =
           interaction.commandName ===
-          "add-role-request";
+          "add-staff-friend-request";
 
         if (isAdd) {
           account.balance += amount;
@@ -4111,8 +4069,8 @@ client.on(Events.InteractionCreate, async interaction => {
         }
 
         saveJson(
-          ROLE_REQUESTS_FILE,
-          roleRequestsData
+          STAFF_FRIEND_REQUESTS_FILE,
+          staffFriendRequestsData
         );
 
         return replyToInteraction(
@@ -4127,8 +4085,8 @@ client.on(Events.InteractionCreate, async interaction => {
                 )
                 .setTitle(
                   isAdd
-                    ? "➕ נוספו בקשות רול"
-                    : "➖ הוסרו בקשות רול"
+                    ? "➕ נוספו בקשות Staff Friend"
+                    : "➖ הוסרו בקשות Staff Friend"
                 )
                 .addFields(
                   {
@@ -6001,58 +5959,44 @@ client.on(Events.InteractionCreate, async interaction => {
 
     if (
       interaction.customId.startsWith(
-        "role_request_approve:"
+        "staff_friend_approve:"
       ) ||
       interaction.customId.startsWith(
-        "role_request_deny:"
+        "staff_friend_deny:"
       )
     ) {
       try {
-        if (!hasRoleRequestConfig()) {
+        if (!hasStaffFriendConfig()) {
           return interaction.reply({
             content:
-              "❌ חסרים IDs של מערכת בקשות הרולים ב־config.js.",
+              "❌ חסרים IDs של מערכת Staff Friend ב־config.js.",
             ephemeral: true
           });
         }
 
         if (
-          !isRoleRequestOwner(
+          !isStaffFriendOwner(
             interaction.member
           )
         ) {
           return interaction.reply({
             content:
-              "❌ רק מי שיש לו את רול ה־Owner יכול לטפל בבקשה.",
+              "❌ רק מי שיש לו רול Owner יכול לטפל בבקשה.",
             ephemeral: true
           });
         }
 
         const [
           action,
-          roleKey,
           targetId,
           requesterId
         ] =
           interaction.customId
             .split(":");
 
-        const roleType =
-          getRoleRequestType(
-            roleKey
-          );
-
-        if (!roleType) {
-          return interaction.reply({
-            content:
-              "❌ סוג הרול בבקשה לא תקין.",
-            ephemeral: true
-          });
-        }
-
         const approved =
           action ===
-          "role_request_approve";
+          "staff_friend_approve";
 
         if (!approved) {
           const deniedEmbed =
@@ -6063,7 +6007,7 @@ client.on(Events.InteractionCreate, async interaction => {
               )
               .setColor("Red")
               .setTitle(
-                `❌ בקשת ${roleType.name} נדחתה`
+                "❌ בקשת Staff Friend נדחתה"
               )
               .addFields({
                 name:
@@ -6079,8 +6023,7 @@ client.on(Events.InteractionCreate, async interaction => {
               deniedEmbed
             ],
             components:
-              roleRequestButtons(
-                roleType.key,
+              staffFriendRequestButtons(
                 targetId,
                 requesterId,
                 true
@@ -6095,7 +6038,7 @@ client.on(Events.InteractionCreate, async interaction => {
               .catch(() => null);
 
           requester?.send(
-            `❌ בקשת ה־${roleType.name} ששלחת עבור <@${targetId}> נדחתה על ידי ${interaction.user.tag}.`
+            `❌ בקשת ה־Staff Friend ששלחת עבור <@${targetId}> נדחתה על ידי ${interaction.user.tag}.`
           ).catch(() => {});
 
           return;
@@ -6110,10 +6053,10 @@ client.on(Events.InteractionCreate, async interaction => {
             )
             .catch(() => null);
 
-        const requestedRole =
+        const staffFriendRole =
           await interaction.guild.roles
             .fetch(
-              roleType.roleId
+              config.staffFriendRoleId
             )
             .catch(() => null);
 
@@ -6130,22 +6073,22 @@ client.on(Events.InteractionCreate, async interaction => {
           });
         }
 
-        if (!requestedRole) {
+        if (!staffFriendRole) {
           return interaction.followUp({
             content:
-              `❌ רול ${roleType.name} לא נמצא.`,
+              "❌ רול Staff Friend לא נמצא.",
             ephemeral: true
           });
         }
 
         if (
           targetMember.roles.cache.has(
-            requestedRole.id
+            staffFriendRole.id
           )
         ) {
           return interaction.followUp({
             content:
-              `❌ למשתמש כבר יש את רול ${roleType.name}. הבקשה לא ירדה.`,
+              "❌ למשתמש כבר יש Staff Friend. הבקשה לא ירדה.",
             ephemeral: true
           });
         }
@@ -6163,35 +6106,27 @@ client.on(Events.InteractionCreate, async interaction => {
         }
 
         if (
-          requestedRole.managed ||
-          requestedRole.position >=
+          staffFriendRole.managed ||
+          staffFriendRole.position >=
             botMember.roles.highest.position
         ) {
           return interaction.followUp({
             content:
-              `❌ רול הבוט חייב להיות מעל רול ${roleType.name}.`,
-            ephemeral: true
-          });
-        }
-
-        if (!targetMember.manageable) {
-          return interaction.followUp({
-            content:
-              "❌ הבוט לא יכול לנהל את המשתמש הזה. תעלה את רול הבוט מעל הרול שלו.",
+              "❌ רול הבוט חייב להיות מעל רול Staff Friend.",
             ephemeral: true
           });
         }
 
         const requestUse =
-          useRoleRequest(
+          useStaffFriendRequest(
             requesterId
           );
 
         if (!requestUse.success) {
           return interaction.followUp({
             content:
-              "❌ למי ששלח את הבקשה כבר אין בקשות רול זמינות. " +
-              "הבקשה לא אושרה ולא בוצע שינוי.",
+              "❌ למי ששלח את הבקשה כבר אין בקשות Staff Friend זמינות. " +
+              "הבקשה לא אושרה.",
             ephemeral: true
           });
         }
@@ -6199,13 +6134,13 @@ client.on(Events.InteractionCreate, async interaction => {
         const roleAdded =
           await targetMember.roles
             .add(
-              requestedRole,
-              `${roleType.name} request approved by ${interaction.user.tag}`
+              staffFriendRole,
+              `Staff Friend request approved by ${interaction.user.tag}`
             )
             .then(() => true)
             .catch(error => {
               console.error(
-                "❌ Role request role add error:",
+                "❌ Staff Friend role add error:",
                 error
               );
 
@@ -6213,13 +6148,13 @@ client.on(Events.InteractionCreate, async interaction => {
             });
 
         if (!roleAdded) {
-          refundRoleRequest(
+          refundStaffFriendRequest(
             requestUse.account
           );
 
           return interaction.followUp({
             content:
-              `❌ לא הצלחתי להוסיף את רול ${roleType.name}. ` +
+              "❌ לא הצלחתי להוסיף את רול Staff Friend. " +
               "הבקשה הוחזרה למבקש. בדוק הרשאות ומיקום רולים.",
             ephemeral: true
           });
@@ -6233,7 +6168,7 @@ client.on(Events.InteractionCreate, async interaction => {
             )
             .setColor("Green")
             .setTitle(
-              `✅ בקשת ${roleType.name} אושרה`
+              "✅ בקשת Staff Friend אושרה"
             )
             .addFields(
               {
@@ -6245,7 +6180,7 @@ client.on(Events.InteractionCreate, async interaction => {
               {
                 name: "תוצאה",
                 value:
-                  `רול ${roleType.name}: **נוסף**\n` +
+                  "רול Staff Friend: **נוסף**\n" +
                   `בקשות שנותרו למבקש: **${requestUse.account.balance}**`
               }
             )
@@ -6257,8 +6192,7 @@ client.on(Events.InteractionCreate, async interaction => {
             approvedEmbed
           ],
           components:
-            roleRequestButtons(
-              roleType.key,
+            staffFriendRequestButtons(
               targetId,
               requesterId,
               true
@@ -6273,17 +6207,17 @@ client.on(Events.InteractionCreate, async interaction => {
             .catch(() => null);
 
         requester?.send(
-          `✅ בקשת ה־${roleType.name} ששלחת עבור ${targetMember.user.tag} אושרה על ידי ${interaction.user.tag}.`
+          `✅ בקשת ה־Staff Friend ששלחת עבור ${targetMember.user.tag} אושרה על ידי ${interaction.user.tag}.`
         ).catch(() => {});
 
         targetMember.send(
-          `${roleType.emoji} בקשת הרול שלך אושרה! קיבלת את רול **${roleType.name}** בשרת **${interaction.guild.name}**.`
+          `🤝 בקשת Staff Friend אושרה! קיבלת את הרול בשרת **${interaction.guild.name}**.`
         ).catch(() => {});
 
         return;
       } catch (error) {
         console.error(
-          "❌ Role request button error:",
+          "❌ Staff Friend button error:",
           error
         );
 
@@ -6293,7 +6227,7 @@ client.on(Events.InteractionCreate, async interaction => {
         ) {
           return interaction.followUp({
             content:
-              "❌ הייתה שגיאה בטיפול בבקשת הרול.\n" +
+              "❌ הייתה שגיאה בטיפול בבקשת Staff Friend.\n" +
               `שגיאה: \`${error.code || error.message}\``,
             ephemeral: true
           }).catch(() => {});
@@ -6301,7 +6235,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
         return interaction.reply({
           content:
-            "❌ הייתה שגיאה בטיפול בבקשת הרול.\n" +
+            "❌ הייתה שגיאה בטיפול בבקשת Staff Friend.\n" +
             `שגיאה: \`${error.code || error.message}\``,
           ephemeral: true
         }).catch(() => {});
