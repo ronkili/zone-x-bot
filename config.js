@@ -6,26 +6,25 @@ module.exports = {
   memberRoleId: "1508813260412027063",
 
   // רול צוות שמורשה להשתמש בפקודות מודרציה
-  // והוא גם רול ה-Staff שאפשר לבקש במערכת בקשות הרולים
   staffRoleId: "1508813254074564761",
 
   // =====================
-  // ROLE REQUESTS
+  // STAFF FRIEND REQUESTS
   // =====================
 
-  // רק הרול הזה יכול לאשר / לדחות בקשות רול
+  // רק הרול הזה יכול לאשר / לדחות בקשות Staff Friend
   ownerRoleId: "1508813235657248921",
 
-  // הרולים שאפשר לבקש
-  friendRoleId: "1548586553692131398",
+  // הרול שמקבלים כשהבקשה מאושרת
+  staffFriendRoleId: "1548586553692131398",
 
-  // החדר שאליו נשלחות בקשות VIP / Staff / Friend
-  roleRequestsChannelId:
+  // החדר שאליו נשלחות בקשות Staff Friend
+  staffFriendRequestsChannelId:
     "1548590540600377355",
 
   // רול יחיד שמורשה להשתמש ב:
   // /timeout /untimeout /kick /ban
-  punishmentRoleId: "PUT_PUNISHMENT_ROLE_ID_HERE",
+  punishmentRoleId: "1545733059947528313",
 
   // רול Chat Mute
   muteRoleId: "1508813281660370954",
@@ -42,7 +41,7 @@ module.exports = {
   ticketCategoryId: "1545339458176684143",
 
   // רול הצוות שמטפל בכל הטיקטים הרגילים
-  ticketStaffRoleId: "1508813260412027063",
+  ticketStaffRoleId: "1508813254074564761",
 
   // רול נפרד שרק הוא רואה ומטפל בטיקט "בחינה לצוות"
   staffTestTicketRoleId: "1508813258004627557",
