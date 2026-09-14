@@ -80,45 +80,34 @@ const commands = [
     .setDescription("שולח את פאנל ה־XP Shop של Zone X"),
 
   new SlashCommandBuilder()
-    .setName("role-request")
-    .setDescription("שולח בקשה לרול VIP / Staff / Friend")
+    .setName("staff-friend-request")
+    .setDescription("שולח בקשה לתת Staff Friend למשתמש")
     .addUserOption(option =>
       option
         .setName("user")
-        .setDescription("המשתמש שעבורו מבקשים את הרול")
+        .setDescription("המשתמש שעבורו מבקשים Staff Friend")
         .setRequired(true)
-    )
-    .addStringOption(option =>
-      option
-        .setName("role")
-        .setDescription("איזה רול לבקש")
-        .setRequired(true)
-        .addChoices(
-          { name: "VIP", value: "vip" },
-          { name: "Staff", value: "staff" },
-          { name: "Friend", value: "friend" }
-        )
     )
     .addStringOption(option =>
       option
         .setName("reason")
-        .setDescription("למה המשתמש צריך לקבל את הרול")
+        .setDescription("למה המשתמש צריך לקבל Staff Friend")
         .setRequired(true)
         .setMinLength(3)
         .setMaxLength(500)
     ),
 
   new SlashCommandBuilder()
-    .setName("role-requests")
-    .setDescription("מציג כמה בקשות רול זמינות נשארו לך"),
+    .setName("staff-friend-requests")
+    .setDescription("מציג כמה בקשות Staff Friend נשארו לך"),
 
   new SlashCommandBuilder()
-    .setName("add-role-request")
-    .setDescription("מוסיף בקשות רול למשתמש - Owners בלבד")
+    .setName("add-staff-friend-request")
+    .setDescription("מוסיף בקשות Staff Friend למשתמש - Owners בלבד")
     .addUserOption(option =>
       option
         .setName("user")
-        .setDescription("המשתמש שיקבל בקשות רול")
+        .setDescription("המשתמש שיקבל בקשות")
         .setRequired(true)
     )
     .addIntegerOption(option =>
@@ -130,12 +119,12 @@ const commands = [
     ),
 
   new SlashCommandBuilder()
-    .setName("remove-role-request")
-    .setDescription("מוריד בקשות רול ממשתמש - Owners בלבד")
+    .setName("remove-staff-friend-request")
+    .setDescription("מוריד בקשות Staff Friend ממשתמש - Owners בלבד")
     .addUserOption(option =>
       option
         .setName("user")
-        .setDescription("המשתמש שממנו יורידו בקשות רול")
+        .setDescription("המשתמש שממנו יורידו בקשות")
         .setRequired(true)
     )
     .addIntegerOption(option =>
